@@ -1,3 +1,11 @@
+<!-- astria-logo -->
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset=".github/assets/astria-logo-reverse.svg">
+    <img src=".github/assets/astria-logo.svg" alt="Astria" width="320">
+  </picture>
+</p>
+
 # Astria gateway
 
 Astria Gateway (A10): aplikasi mandiri di DMZ untuk kanal dan bot; hanya /hooks/* yang menghadap internet.
