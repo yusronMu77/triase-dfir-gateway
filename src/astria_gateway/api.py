@@ -2,11 +2,13 @@
 
 Autentikasi: HMAC per permintaan `astria_common.hmac_auth` (header X-Astria-Service/Ts/Nonce/Sig, jendela 300
 detik, nonce sekali pakai). Kunci pemanggil dari `ASTRIA_GW_CALLER_KEYS_FILE`; tiap endpoint membatasi layanannya.
+Pengecualian: `POST /whatsapp/masuk` dari `wa-bridge` (Node, khusus uji) memakai Bearer token bersama.
 Galat memakai bentuk `{"error": {"code", "message", "trace_id"}}` dengan kode GW§3.7.
 """
 
 from __future__ import annotations
 
+import hmac
 import json
 from collections.abc import Awaitable, Callable
 from datetime import datetime
@@ -25,6 +27,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
+from astria_gateway.channels import WHATSAPP_MAX_CHARS
 from astria_gateway.outbox import enqueue
 from astria_gateway.render import ALLOWED_FIELDS, render_event
 from astria_gateway.store import audit, channel_config, channel_identity, event_inbox, now, outbox_message
@@ -154,6 +157,33 @@ async def receive_event(request: Request, _caller: Annotated[str, Depends(requir
     return JSONResponse({"event_id": event.event_id, "messages": messages}, status_code=202)
 
 
+class WhatsAppIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: str = Field(pattern=r"^[A-Za-z0-9._:-]{1,128}$")
+    dari: str = Field(pattern=r"^[0-9]{8,15}$")
+    teks: str = Field(max_length=WHATSAPP_MAX_CHARS)
+    waktu: datetime
+
+
+@router.post("/whatsapp/masuk", status_code=202)
+async def whatsapp_inbound(request: Request) -> dict:
+    """Pesan teks pribadi dari wa-bridge; diproses seperti perintah Telegram, balasan lewat outbox `whatsapp`."""
+    state: Any = request.app.state
+    if state.wa_inbound is None:
+        raise AstriaError("GW_CHANNEL_UNKNOWN", "kanal whatsapp tidak aktif", 404)
+    auth = request.headers.get("authorization", "")
+    if not (auth.startswith("Bearer ") and hmac.compare_digest(auth[7:].encode(), state.wa_token.encode())):
+        log.warning("wa_token_ditolak")
+        raise AstriaError("GW_AUTH_FAILED", "token tidak valid", 401)
+    _db(request)
+    try:
+        msg = WhatsAppIn.model_validate_json(await request.body())
+    except ValidationError:
+        raise AstriaError("GW_EVENT_INVALID", "pesan whatsapp tidak valid", 422) from None
+    await state.wa_inbound.handle(msg.id, msg.dari, msg.teks)
+    return {"id": msg.id}
+
+
 @router.get("/status")
 async def status(
     request: Request, _caller: Annotated[str, Depends(require_caller("notifier", "config", "api"))]
@@ -168,6 +198,7 @@ async def status(
         "outbox": {s: counts.get(s, 0) for s in ("pending", "sending", "sent", "dead")},
         "oldest_pending_at": oldest.isoformat() if oldest else None,
         "telegram": state.poller.status() if state.poller else {"enabled": False},
+        "whatsapp": {"enabled": "whatsapp" in state.adapters},
         "email": {"enabled": "email" in state.adapters},
         "public_listener": bool(state.settings.gw_public_bind),
     }

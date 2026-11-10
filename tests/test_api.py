@@ -12,11 +12,9 @@ from typing import Any
 import pytest
 from astria_common.hmac_auth import signed_headers
 from fastapi.testclient import TestClient
-from helpers import NOTIFIER_KEY, SEED
-from pydantic import SecretStr
+from helpers import NOTIFIER_KEY, gateway_settings, ready_client
 
 from astria_gateway.main import build_app
-from astria_gateway.settings import Settings
 
 EVENTS = "/internal/v1/events"
 
@@ -25,21 +23,8 @@ EVENTS = "/internal/v1/events"
 def gw(tmp_path: Path) -> Iterator[tuple[TestClient, Path]]:
     keys = tmp_path / "keys.json"
     keys.write_text(json.dumps({"notifier": NOTIFIER_KEY.hex(), "config": ("33" * 32)}))
-    seed = tmp_path / "seed.json"
-    seed.write_text(json.dumps(SEED))
-    db_file = tmp_path / "gateway_test.db"
-    settings = Settings(
-        env="test",
-        database_url=SecretStr(f"sqlite+aiosqlite:///{db_file}"),
-        gw_caller_keys_file=keys,
-        gw_seed_file=seed,
-    )
-    with TestClient(build_app(settings)) as client:
-        deadline = time.monotonic() + 10
-        while client.get("/ready").status_code != 200:
-            assert time.monotonic() < deadline, client.get("/ready").json()
-            time.sleep(0.05)
-        yield client, db_file
+    with ready_client(build_app(gateway_settings(tmp_path, gw_caller_keys_file=keys))) as client:
+        yield client, tmp_path / "gateway_test.db"
 
 
 def card_event(event_id: str = "01JC8Z3K7Q0M2V5T9B1N4R6W8X", **payload: Any) -> dict[str, Any]:
@@ -218,5 +203,6 @@ def test_status_requires_signature_and_reports_outbox(gw) -> None:
     body = resp.json()
     assert sum(body["outbox"].values()) == 2
     assert body["telegram"] == {"enabled": False}
+    assert body["whatsapp"] == {"enabled": False}
     assert body["email"] == {"enabled": False}
     assert body["public_listener"] is False

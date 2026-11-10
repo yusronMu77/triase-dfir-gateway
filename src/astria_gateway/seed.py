@@ -21,13 +21,17 @@ from astria_gateway.store import channel_config, channel_identity, now, upsert
 log = get_logger(__name__)
 
 CHANNEL_ID = r"^[a-z][a-z0-9_-]{0,63}$"
-EXTERNAL_ID = {"telegram": r"^-?[0-9]{1,20}$", "email": r"^[^@\s]{1,64}@[^@\s]{1,255}$"}
+EXTERNAL_ID = {
+    "telegram": r"^-?[0-9]{1,20}$",
+    "email": r"^[^@\s]{1,64}@[^@\s]{1,255}$",
+    "whatsapp": r"^[0-9]{8,15}$",  # nomor internasional tanpa + (628...)
+}
 
 
 class SeedChannel(BaseModel):
     model_config = ConfigDict(extra="forbid")
     channel_id: str = Field(pattern=CHANNEL_ID)
-    type: Literal["telegram", "email"]
+    type: Literal["telegram", "email", "whatsapp"]
 
 
 class SeedIdentity(BaseModel):

@@ -2,46 +2,25 @@
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 import httpx
 import pytest
-from astria_common.hmac_auth import NonceCache, verify
-from helpers import GATEWAY_KEY, TelegramFake, outbox_rows, seeded, telegram, update
+from helpers import CoreFake, TelegramFake, facade, outbox_rows, seeded, telegram, update
 from sqlalchemy import select
 
 from astria_gateway import render
-from astria_gateway.facade import FacadeClient
-from astria_gateway.poller import TelegramPoller, sender_hash
+from astria_gateway.inbound import InboundHandler, sender_hash
+from astria_gateway.poller import TelegramPoller
 from astria_gateway.store import gw_audit, inbound_message, poll_state
 
 pytestmark = pytest.mark.anyio
 
-CARD = {"card_id": "IC-20261110-003", "band": "KRITIS", "skor": 71}
-
-
-class CoreFake:
-    """api tiruan: memeriksa tanda tangan HMAC `gateway`, mencatat permintaan, membalas `response`."""
-
-    def __init__(self, response: httpx.Response | None = None) -> None:
-        self.requests: list[dict[str, Any]] = []
-        self.response = response or httpx.Response(200, json={"command": "card", "ok": True, "hasil": CARD})
-        self.nonces = NonceCache()
-
-    def handler(self, request: httpx.Request) -> httpx.Response:
-        assert request.headers["X-Astria-Service"] == "gateway"
-        verify(GATEWAY_KEY, request.method, request.url.path, request.headers, request.content, self.nonces)
-        self.requests.append(json.loads(request.content))
-        return self.response
-
 
 def make_poller(db, tg: TelegramFake, core: CoreFake | None = None, **kw: Any) -> TelegramPoller:
-    facade = None
-    if core is not None:
-        http = httpx.AsyncClient(base_url="http://api:8000", transport=httpx.MockTransport(core.handler))
-        facade = FacadeClient("http://api:8000", GATEWAY_KEY, http=http)
-    return TelegramPoller(db, telegram(tg.handler), facade, channel_id="telegram-tim", **kw)
+    tg_adapter = telegram(tg.handler)
+    handler = InboundHandler(db, facade(core), tg_adapter.send, kind="telegram", channel_id="telegram-tim", **kw)
+    return TelegramPoller(db, tg_adapter, handler)
 
 
 async def _offset(db) -> int | None:
@@ -139,7 +118,7 @@ async def test_unknown_sender_gets_one_fixed_reply_and_audit(db) -> None:
     async with db.engine.connect() as conn:
         audit = (await conn.execute(select(gw_audit.c.action, gw_audit.c.detail_json))).all()
     assert [a.action for a in audit] == ["sender.unknown", "sender.unknown"]
-    assert sender_hash("555") in audit[0].detail_json and '"555"' not in audit[0].detail_json
+    assert sender_hash("telegram", "555") in audit[0].detail_json and '"555"' not in audit[0].detail_json
 
 
 async def test_group_chat_ignored_and_rate_limits(db) -> None:

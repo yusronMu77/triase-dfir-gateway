@@ -1,4 +1,4 @@
-"""Adapter kanal keluar: Telegram Bot API (httpx) dan SMTP (aiosmtplib). Kanal tidak tahu soal perintah.
+"""Adapter kanal keluar: Telegram dan jembatan WhatsApp (httpx), SMTP (aiosmtplib). Kanal tidak tahu soal perintah.
 
 Galat pengiriman jadi `SendError`: `permanent` (pesan jadi `dead`) atau sementara (dicoba ulang, `retry_after`
 dari penyedia dihormati). `reason` aman dicatat: tidak pernah memuat token, URL bot, atau isi pesan.
@@ -18,6 +18,7 @@ from astria_common.http import make_client
 from astria_gateway.render import truncate
 
 TELEGRAM_API = "https://api.telegram.org"
+WHATSAPP_MAX_CHARS = 4000  # sama dengan batas `teks` di wa-bridge; lebih panjang ditolak 400 (permanen)
 SMTP_TIMEOUT = 10.0
 
 
@@ -87,6 +88,43 @@ class Telegram:
             payload["offset"] = offset
         result = await self._call("getUpdates", payload)
         return [u for u in result if isinstance(u, dict)] if isinstance(result, list) else []
+
+    async def start(self) -> None:
+        return None
+
+    async def stop(self) -> None:
+        await self._http.aclose()
+
+    async def check(self) -> Check:
+        return Check("degraded", self.last_error) if self.last_error else Check("ok")
+
+
+class WhatsApp:
+    """Jembatan WhatsApp Web `wa-bridge` (khusus uji): `POST /kirim {ke, teks}` dengan Bearer token.
+
+    400/401 permanen (input atau token salah); 503 (belum terhubung), 502, 5xx lain, dan galat jaringan dicoba ulang.
+    """
+
+    name = "whatsapp"
+    required = False
+
+    def __init__(self, base_url: str, token: str, *, http: httpx.AsyncClient | None = None):
+        self._headers = {"Authorization": f"Bearer {token}"}
+        self.last_error: str | None = None
+        self._http = http or make_client(base_url, timeout=20.0)
+
+    async def send(self, recipient: str, subject: str, text: str) -> None:
+        payload = {"ke": recipient, "teks": truncate(text, WHATSAPP_MAX_CHARS)}
+        try:
+            resp = await self._http.post("/kirim", json=payload, headers=self._headers)
+        except httpx.HTTPError as exc:
+            self.last_error = f"whatsapp_transport_{type(exc).__name__}"
+            raise SendError(self.last_error) from None
+        if resp.status_code == 200:
+            self.last_error = None
+            return
+        self.last_error = f"whatsapp_{resp.status_code}"
+        raise SendError(self.last_error, permanent=resp.status_code in (400, 401))
 
     async def start(self) -> None:
         return None
