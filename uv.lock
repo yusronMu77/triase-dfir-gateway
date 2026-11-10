@@ -1,6 +1,15 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.14"
+
+[[package]]
+name = "aiosmtplib"
+version = "5.1.3"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/9b/5c/9cabc5db6d607616e81ba6d8f1f231cd5a75955807a308c1090a59072d6d/aiosmtplib-5.1.3.tar.gz", hash = "sha256:ac2b418d3260ba62d9cfd0fe7359726e9dc009a4e8e8d9909fdfae332f522a7c", size = 77010, upload-time = "2026-09-08T02:11:20.532Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/9c/0a/b56ab8163d54960337fdca475d3dfd56c8badf6172e79cf2ad00d5335dc1/aiosmtplib-5.1.3-py3-none-any.whl", hash = "sha256:f7d76ce3d4995a65a178c1f11e1bd1607706b921d00cb768e7a2c7f7ef5517a8", size = 30116, upload-time = "2026-09-08T02:11:19.352Z" },
+]
 
 [[package]]
 name = "aiosqlite"
@@ -53,8 +62,8 @@ wheels = [
 
 [[package]]
 name = "astria-common"
-version = "0.2.0"
-source = { git = "https://github.com/yusronMu77/triase-dfir-common?tag=v0.2.0#1bc2f1e6f1a281ca89b8fbe759edc311ee30d2ce" }
+version = "0.2.1"
+source = { git = "https://github.com/yusronMu77/triase-dfir-common?tag=v0.2.1#b85bce326d87fffba5676b26bad8ea881064d73b" }
 dependencies = [
     { name = "aiosqlite" },
     { name = "astria-contracts" },
@@ -83,8 +92,8 @@ otel = [
 
 [[package]]
 name = "astria-contracts"
-version = "0.1.0"
-source = { git = "https://github.com/yusronMu77/triase-dfir-contracts?tag=v0.1.0#90aece1926b0261786fbb2566e0f0499921ef29a" }
+version = "0.2.0"
+source = { git = "https://github.com/yusronMu77/triase-dfir-contracts?tag=v0.2.0#2afa29c332c6fe5164d39cc12d5301b272597370" }
 dependencies = [
     { name = "pydantic" },
 ]
@@ -94,8 +103,10 @@ name = "astria-gateway"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "aiosmtplib" },
     { name = "astria-common", extra = ["otel"] },
     { name = "astria-contracts" },
+    { name = "httpx" },
 ]
 
 [package.dev-dependencies]
@@ -107,8 +118,10 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "astria-common", extras = ["otel"], git = "https://github.com/yusronMu77/triase-dfir-common?tag=v0.2.0" },
-    { name = "astria-contracts", git = "https://github.com/yusronMu77/triase-dfir-contracts?tag=v0.1.0" },
+    { name = "aiosmtplib", specifier = ">=5.1.3,<6" },
+    { name = "astria-common", extras = ["otel"], git = "https://github.com/yusronMu77/triase-dfir-common?tag=v0.2.1" },
+    { name = "astria-contracts", git = "https://github.com/yusronMu77/triase-dfir-contracts?tag=v0.2.0" },
+    { name = "httpx", specifier = ">=0.28.1,<0.29" },
 ]
 
 [package.metadata.requires-dev]
