@@ -36,7 +36,7 @@ channel_config = Table(
     "channel_config",
     metadata,
     Column("channel_id", Text, primary_key=True),
-    Column("type", Text, nullable=False),  # email | telegram
+    Column("type", Text, nullable=False),  # email | telegram | whatsapp
     Column("updated_at", DateTime(timezone=True), nullable=False),
 )
 
@@ -45,7 +45,7 @@ channel_identity = Table(
     metadata,
     Column("identity_id", Text, primary_key=True),
     Column("channel_id", Text, ForeignKey("channel_config.channel_id"), nullable=False),
-    Column("external_id", Text, nullable=False),  # chat_id Telegram atau alamat email
+    Column("external_id", Text, nullable=False),  # chat_id Telegram, alamat email, atau nomor WhatsApp (digit)
     Column("user_id", Text, nullable=False),
     Column("status", Text, nullable=False),  # aktif | dicabut
     Column("updated_at", DateTime(timezone=True), nullable=False),
@@ -75,7 +75,7 @@ inbound_message = Table(
     "inbound_message",
     metadata,
     Column("channel_id", Text, ForeignKey("channel_config.channel_id"), primary_key=True),
-    Column("provider_msg_id", Text, primary_key=True),  # update_id Telegram
+    Column("provider_msg_id", Text, primary_key=True),  # update_id Telegram atau id pesan WhatsApp
     Column("identity_id", Text),
     Column("command", Text),
     Column("status", Text, nullable=False),  # diterima | selesai | ditolak

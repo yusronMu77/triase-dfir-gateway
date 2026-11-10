@@ -8,3 +8,4 @@ tests
 *.log
 .env
 .env.*
+wa-bridge

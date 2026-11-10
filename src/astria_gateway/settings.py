@@ -41,6 +41,13 @@ class Settings(AstriaSettings):
     gw_telegram_poll_timeout: int = 30
     gw_telegram_max_chars: int = 3000
 
+    gw_wa_bridge_url: str = ""
+    """Basis URL jembatan WhatsApp Web `wa-bridge` (khusus uji). Kosong, atau token kosong = WhatsApp mati."""
+    gw_wa_bridge_token_file: Path | None = None
+    """Bearer token bersama gateway dan wa-bridge (`POST /kirim` dan `POST /internal/v1/whatsapp/masuk`)."""
+    gw_whatsapp_channel_id: str = "wa-tim"
+    """Kanal yang dilayani penerima WhatsApp (identitas, dedupe)."""
+
     gw_smtp_host: str = ""
     """Kosong = adapter email mati."""
     gw_smtp_port: int = 587
@@ -57,6 +64,9 @@ class Settings(AstriaSettings):
 
     def telegram_token(self) -> str:
         return _secret(self.gw_telegram_bot_token, self.gw_telegram_bot_token_file)
+
+    def wa_bridge_token(self) -> str:
+        return _secret(None, self.gw_wa_bridge_token_file) if self.gw_wa_bridge_url else ""
 
     def smtp_password(self) -> str:
         return _secret(self.gw_smtp_password, self.gw_smtp_password_file)

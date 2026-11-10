@@ -6,6 +6,7 @@ from typing import Any
 
 import httpx
 import orjson
+from astria_common.component import Check
 from astria_common.hmac_auth import signed_headers
 from astria_common.http import make_client
 
@@ -31,6 +32,11 @@ def _error_message(resp: httpx.Response) -> str:
 
 
 class FacadeClient:
+    """Juga komponen: dipakai bersama poller Telegram dan penerima WhatsApp, ditutup sekali saat berhenti."""
+
+    name = "command-facade"
+    required = False
+
     def __init__(self, base_url: str, key: bytes, *, http: httpx.AsyncClient | None = None) -> None:
         self._key = key
         self._http = http or make_client(base_url, timeout=10.0)
@@ -64,5 +70,11 @@ class FacadeClient:
             raise FacadeError(unavailable=True)
         return data["hasil"]
 
-    async def aclose(self) -> None:
+    async def start(self) -> None:
+        return None
+
+    async def stop(self) -> None:
         await self._http.aclose()
+
+    async def check(self) -> Check:
+        return Check("ok")

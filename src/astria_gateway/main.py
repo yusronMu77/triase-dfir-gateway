@@ -1,4 +1,4 @@
-"""Rakit gateway: satu proses, dua listener (GW§3.1), basis data, seed, pekerja outbox, dan poller Telegram.
+"""Rakit gateway: satu proses, dua listener (GW§3.1), basis data, seed, pekerja outbox, poller Telegram, dan WhatsApp.
 
 `astria-gateway` (atau `python -m astria_gateway`) menjalankan listener internal dan, bila
 `ASTRIA_GW_PUBLIC_BIND` diisi, listener publik dalam satu event loop sehingga hanya ada satu penulis basis data.
@@ -17,8 +17,9 @@ from astria_common.service import standard_runtime
 from fastapi import FastAPI
 
 from astria_gateway import api
-from astria_gateway.channels import Adapter, Smtp, Telegram
+from astria_gateway.channels import Adapter, Smtp, Telegram, WhatsApp
 from astria_gateway.facade import FacadeClient
+from astria_gateway.inbound import InboundHandler
 from astria_gateway.outbox import OutboxWorker
 from astria_gateway.poller import TelegramPoller
 from astria_gateway.public import public_app
@@ -34,8 +35,16 @@ def build_telegram(settings: Settings) -> Telegram | None:
     return Telegram(token, max_chars=settings.gw_telegram_max_chars, poll_timeout=settings.gw_telegram_poll_timeout)
 
 
-def build_adapters(settings: Settings, telegram: Telegram | None) -> dict[str, Adapter]:
+def build_whatsapp(settings: Settings, token: str) -> WhatsApp | None:
+    if not token:
+        return None
+    return WhatsApp(settings.gw_wa_bridge_url, token)
+
+
+def build_adapters(settings: Settings, telegram: Telegram | None, whatsapp: WhatsApp | None) -> dict[str, Adapter]:
     adapters: dict[str, Adapter] = {"telegram": telegram} if telegram else {}
+    if whatsapp:
+        adapters["whatsapp"] = whatsapp
     if settings.gw_smtp_host:
         adapters["email"] = Smtp(
             host=settings.gw_smtp_host,
@@ -52,24 +61,31 @@ def build_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings()
     runtime = standard_runtime(settings, metadata=[metadata])
     telegram = build_telegram(settings)
-    adapters = build_adapters(settings, telegram)
+    wa_token = settings.wa_bridge_token()
+    whatsapp = build_whatsapp(settings, wa_token)
+    adapters = build_adapters(settings, telegram, whatsapp)
     poller: TelegramPoller | None = None
-    if runtime.db is not None:
-        runtime.add(SeedLoader(runtime.db, load_seed(settings.gw_seed_file)))
+    wa_inbound: InboundHandler | None = None
+    db = runtime.db
+    if db is not None:
+        runtime.add(SeedLoader(db, load_seed(settings.gw_seed_file)))
+        facade: FacadeClient | None = None
+        key = settings.service_key_bytes()
+        if key and (telegram or whatsapp):
+            facade = FacadeClient(settings.gw_core_url, key)
+            runtime.add(facade)
+        limits = {"rate_per_identity": settings.gw_rate_per_identity, "rate_global": settings.gw_rate_global}
         if telegram is not None:
             runtime.add(telegram)
-            key = settings.service_key_bytes()
-            facade = FacadeClient(settings.gw_core_url, key) if key else None
-            poller = TelegramPoller(
-                runtime.db,
-                telegram,
-                facade,
-                channel_id=settings.gw_telegram_channel_id,
-                rate_per_identity=settings.gw_rate_per_identity,
-                rate_global=settings.gw_rate_global,
-            )
+            channel_id = settings.gw_telegram_channel_id
+            handler = InboundHandler(db, facade, telegram.send, kind="telegram", channel_id=channel_id, **limits)
+            poller = TelegramPoller(db, telegram, handler)
             runtime.add(poller)
-        runtime.add(OutboxWorker(runtime.db, adapters))
+        if whatsapp is not None:
+            runtime.add(whatsapp)
+            channel_id = settings.gw_whatsapp_channel_id
+            wa_inbound = InboundHandler(db, facade, whatsapp.send, kind="whatsapp", channel_id=channel_id, **limits)
+        runtime.add(OutboxWorker(db, adapters))
     app = create_app(settings, components=runtime.components, routers=[api.router], title="Astria gateway")
     # Log permintaan httpx memuat URL Bot API yang berisi token; jangan pernah sampai ke log.
     for name in ("httpx", "httpcore"):
@@ -77,6 +93,8 @@ def build_app(settings: Settings | None = None) -> FastAPI:
     app.state.db = runtime.db
     app.state.adapters = adapters
     app.state.poller = poller
+    app.state.wa_inbound = wa_inbound
+    app.state.wa_token = wa_token
     app.state.caller_keys = api.load_keys(settings.gw_caller_keys_file)
     app.state.nonces = NonceCache()
     return app

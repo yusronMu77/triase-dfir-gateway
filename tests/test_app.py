@@ -52,3 +52,17 @@ def test_invalid_seed_refuses_to_start(tmp_path) -> None:
     db = SecretStr(f"sqlite+aiosqlite:///{tmp_path}/gateway_test.db")
     with pytest.raises(ValueError, match="external_id"):
         build_app(Settings(env="test", database_url=db, gw_seed_file=seed))
+
+
+def test_whatsapp_needs_url_and_token_file(tmp_path) -> None:
+    db = SecretStr(f"sqlite+aiosqlite:///{tmp_path}/gateway_test.db")
+    token_file = tmp_path / "wa_bridge.token"
+    token_file.write_text("uji-token\n")
+    url = "http://wa-bridge:3000"
+    for kw in ({"gw_wa_bridge_url": url}, {"gw_wa_bridge_token_file": token_file}):
+        app = build_app(Settings(env="test", database_url=db, **kw))
+        assert "whatsapp" not in app.state.adapters and app.state.wa_inbound is None
+    settings = Settings(env="test", database_url=db, gw_wa_bridge_url=url, gw_wa_bridge_token_file=token_file)
+    app = build_app(settings)
+    assert set(app.state.adapters) == {"whatsapp"} and app.state.wa_inbound.channel_id == "wa-tim"
+    assert app.state.wa_token == "uji-token"  # noqa: S105
