@@ -1,14 +1,13 @@
-"""Jalankan layanan: `astria-gateway` atau `python -m astria_gateway`."""
+"""Jalankan layanan: `astria-gateway` atau `python -m astria_gateway` (listener internal dan publik)."""
 
-from astria_common.app import run
+import asyncio
 
-from astria_gateway.main import build_app
+from astria_gateway.main import serve
 from astria_gateway.settings import Settings
 
 
 def main() -> None:
-    settings = Settings()
-    run(build_app(settings), settings)
+    asyncio.run(serve(Settings()))
 
 
 if __name__ == "__main__":

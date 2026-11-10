@@ -20,3 +20,35 @@ def test_refuses_to_start_with_non_dev_database_in_dev() -> None:
     url = SecretStr("postgresql+psycopg://u:p@postgres:5432/astria")
     with pytest.raises(EnvironmentGuardError):
         build_app(Settings(env="dev", database_url=url))
+
+
+def test_telegram_disabled_without_token_and_enabled_from_file(tmp_path) -> None:
+    db = SecretStr(f"sqlite+aiosqlite:///{tmp_path}/gateway_test.db")
+    app = build_app(Settings(env="test", database_url=db))
+    assert app.state.poller is None and "telegram" not in app.state.adapters
+
+    token_file = tmp_path / "telegram_bot_token"
+    token_file.write_text("123456:TEST-token-not-real\n")  # gitleaks:allow
+    settings = Settings(env="test", database_url=db, gw_telegram_bot_token_file=token_file, gw_smtp_host="mailpit")
+    assert settings.telegram_token() == "123456:TEST-token-not-real"  # gitleaks:allow
+    assert "TEST-token" not in repr(settings)
+    app = build_app(settings)
+    assert app.state.poller is not None and set(app.state.adapters) == {"telegram", "email"}
+
+
+def test_empty_token_file_disables_telegram(tmp_path) -> None:
+    token_file = tmp_path / "telegram_bot_token"
+    token_file.write_text("")
+    settings = Settings(env="test", gw_telegram_bot_token_file=token_file)
+    assert build_app(settings).state.adapters == {}
+
+
+def test_invalid_seed_refuses_to_start(tmp_path) -> None:
+    seed = tmp_path / "seed.json"
+    seed.write_text(
+        '{"channels": [{"channel_id": "email-tim", "type": "email"}], "identities": '
+        '[{"identity_id": "i1", "channel_id": "email-tim", "external_id": "bukan-email", "user_id": "usr_1"}]}'
+    )
+    db = SecretStr(f"sqlite+aiosqlite:///{tmp_path}/gateway_test.db")
+    with pytest.raises(ValueError, match="external_id"):
+        build_app(Settings(env="test", database_url=db, gw_seed_file=seed))

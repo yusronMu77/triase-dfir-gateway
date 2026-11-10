@@ -35,11 +35,14 @@ FROM ${PYTHON_IMAGE} AS runtime
 RUN useradd --system --uid 10001 --no-create-home --shell /usr/sbin/nologin astria \
     && install -d -o astria -g astria -m 0700 /var/lib/astria/gateway
 COPY --from=build /app/.venv /app/.venv
+# Gateway: listener internal 8080 (GW§3.1, bawaan 127.0.0.1 di luar kontainer); publik hanya bila ASTRIA_GW_PUBLIC_BIND diisi.
 ENV PATH=/app/.venv/bin:$PATH \
     PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1
+    PYTHONDONTWRITEBYTECODE=1 \
+    ASTRIA_HOST=0.0.0.0 \
+    ASTRIA_PORT=8080
 USER 10001
-EXPOSE 8000
+EXPOSE 8080
 HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=6 \
-    CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready', timeout=2)"]
+    CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/ready', timeout=2)"]
 CMD ["astria-gateway"]
