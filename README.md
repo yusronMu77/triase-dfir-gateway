@@ -88,7 +88,7 @@ Kontrak `POST /internal/v1/whatsapp/masuk` (dari `wa-bridge`, hanya listener int
   (WhatsApp mati); 422 `GW_EVENT_INVALID`; 503 `GW_NOT_READY`.
 
 Konfigurasi (`ASTRIA_GW_*`): `PUBLIC_BIND` (`host:port`), `CORE_URL` (bawaan `http://api:8000`), `CALLER_KEYS_FILE` (JSON
-`{layanan: kunci_hex}`), `SEED_FILE`, `TELEGRAM_BOT_TOKEN` atau `TELEGRAM_BOT_TOKEN_FILE` (kosong dan tanpa kunci induk = Telegram mati; token dari config mengisi kemudian),
+`{layanan: kunci_hex}`), `SEED_FILE`, `TELEGRAM_ENABLED` (bawaan `true`; `false` = Telegram tidak dipakai sama sekali walau kunci induk ada), `TELEGRAM_BOT_TOKEN` atau `TELEGRAM_BOT_TOKEN_FILE` (kosong dan tanpa kunci induk = Telegram mati; token dari config mengisi kemudian),
 `TELEGRAM_CHANNEL_ID` (bawaan `telegram-tim`), `TELEGRAM_POLL_TIMEOUT`, `TELEGRAM_MAX_CHARS`, `WA_BRIDGE_URL` dan
 `WA_BRIDGE_TOKEN_FILE` (salah satu kosong = WhatsApp mati), `WHATSAPP_CHANNEL_ID` (bawaan `wa-tim`),
 `SMTP_HOST` (kosong = email mati),

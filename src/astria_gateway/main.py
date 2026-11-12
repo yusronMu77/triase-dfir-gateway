@@ -40,6 +40,8 @@ def secret_source(vault: SecretVault | None, key: str, fallback: str) -> Callabl
 
 def build_telegram(settings: Settings, vault: SecretVault | None) -> Telegram | None:
     """Telegram aktif bila ada token env, atau kunci induk diisi sehingga token bisa ditulis config."""
+    if not settings.gw_telegram_enabled:
+        return None
     token = settings.telegram_token()
     if not token and not (vault is not None and vault.can_store):
         return None
