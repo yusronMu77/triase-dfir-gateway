@@ -59,7 +59,7 @@ def telegram(handler: Any, **kw: Any) -> Any:
     """Adapter Telegram dengan Bot API tiruan (URL dasar sama dengan produksi, termasuk token uji)."""
     from astria_gateway.channels import TELEGRAM_API, Telegram
 
-    http = httpx.AsyncClient(base_url=f"{TELEGRAM_API}/bot{TOKEN}/", transport=httpx.MockTransport(handler))
+    http = httpx.AsyncClient(base_url=TELEGRAM_API, transport=httpx.MockTransport(handler))
     return Telegram(TOKEN, http=http, **kw)
 
 
