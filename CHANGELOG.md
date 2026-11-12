@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- `/antrean` tidak lagi menerima argumen band: Command Facade api (`queue`) menolak argumen apa pun, sehingga `/antrean <band>` selalu gagal "argumen perintah tidak sesuai". Teks bantuan disesuaikan.
+
 ### Added
 
 - Rahasia kanal dari config dan pencabutan identitas: `PUT /internal/v1/secrets/{key}` dari config (HMAC `config` saja, 204 tanpa nilai, idempoten; kunci `telegram.bot_token` dan `smtp.password`, 404 untuk kunci lain, 422 untuk format token salah, 409 bila dikunci env, 503 bila kunci induk belum diisi). Rahasia disimpan di tabel `secret` dengan AES-256-GCM (AAD = nama kunci), dibaca ke memori saat start, dan dipakai per panggilan oleh adapter Telegram dan SMTP. Konfigurasi baru: `ASTRIA_GW_MASTER_KEY` atau `_FILE` (32 byte, base64 atau hex). Event kontrol `identity.revoked` (`channel_id` "*") mencabut semua ikatan kanal aktif milik `user_id` (status `dicabut`), idempoten lewat `event_inbox`; pesan dari chat itu tidak lagi diterjemahkan jadi perintah, dan pesan yang masih antre gagal permanen (`identitas_tidak_aktif`). Telegram aktif juga bila kunci induk diisi, supaya token bisa ditulis config.

@@ -22,7 +22,7 @@ HELP = "\n".join(
     [
         "Perintah Astria:",
         "/status - status sistem",
-        "/antrean [band] - antrean kartu teratas",
+        "/antrean - antrean kartu teratas",
         "/kartu <ID> - ringkasan kartu",
         "/bukti <ID> - metadata bukti kartu",
         "/digest - digest terakhir",
