@@ -1,9 +1,11 @@
 """Konfigurasi gateway dari env `ASTRIA_*` (GW§5.9).
 
-Rahasia kanal (token bot, kata sandi SMTP) hanya dari env atau berkas `_FILE`, tidak pernah dicetak.
-Penyimpanan rahasia terenkripsi AES-GCM di basis data (GW§4 tabel `secret`) ditunda.
+Rahasia kanal (token bot, kata sandi SMTP) dari env atau berkas `_FILE` (mengunci nilai basis data), atau ditulis
+config lewat `PUT /internal/v1/secrets/{key}` dan disimpan terenkripsi AES-GCM (`vault.py`). Tidak pernah dicetak.
 """
 
+import base64
+import binascii
 from pathlib import Path
 from typing import Literal
 
@@ -57,6 +59,11 @@ class Settings(AstriaSettings):
     gw_smtp_password_file: Path | None = None
     gw_smtp_from: str = "astria@localhost"
 
+    gw_master_key: SecretStr | None = None
+    gw_master_key_file: Path | None = None
+    """Kunci induk AES-256-GCM untuk rahasia di basis data: 32 byte, base64 atau hex 64 karakter.
+    Kosong = rahasia tidak bisa ditulis lewat API. Salah format = proses menolak start."""
+
     gw_rate_per_identity: int = 20
     """Perintah per menit per identitas (GW§5.5)."""
     gw_rate_global: int = 60
@@ -70,3 +77,22 @@ class Settings(AstriaSettings):
 
     def smtp_password(self) -> str:
         return _secret(self.gw_smtp_password, self.gw_smtp_password_file)
+
+    def master_key(self) -> bytes | None:
+        """Kunci induk 32 byte, atau None bila kosong. ValueError berpesan aman (tanpa nilai) bila salah format."""
+        raw = _secret(self.gw_master_key, self.gw_master_key_file)
+        if not raw:
+            return None
+        if len(raw) == 64:
+            try:
+                key = bytes.fromhex(raw)
+            except ValueError:
+                key = b""
+        else:
+            try:
+                key = base64.b64decode(raw, validate=True)
+            except binascii.Error, ValueError:
+                key = b""
+        if len(key) != 32:
+            raise ValueError("ASTRIA_GW_MASTER_KEY harus 32 byte dalam base64 atau hex 64 karakter")
+        return key

@@ -59,9 +59,26 @@ Kontrak penerimaan `POST /internal/v1/events` (dari notifier):
 - Tipe dan field payload yang diterima: `card.verified` (`card_id`, `version`, `band`, `skor`, `status`, `tautan`, opsional
   `teknik` (daftar), `klaim_total`, `klaim_lolos`), `digest.published` (`digest_id`, `jenis`, `periode_mulai`, `periode_selesai`,
   `tautan`), `ping` (tanpa field; pesan uji kanal).
+- Event kontrol `identity.revoked` (dari notifier, lihat `contracts/events/identity.revoked.schema.json`): `channels` berisi
+  tepat satu entri dengan `channel_id` `"*"` dan payload `user_id` (`usr_...`), `reason`, `revoked_at`. Semua ikatan kanal
+  aktif milik `user_id` menjadi `dicabut`; respons 202 `{"event_id", "identities"}` (jumlah yang dicabut, bisa 0).
 - Respons: 202 `{"event_id", "messages"}`; 409 `GW_EVENT_DUPLICATE` (event_id sudah diterima); 401 `GW_AUTH_FAILED` atau
   `GW_REPLAY`; 404 `GW_CHANNEL_UNKNOWN`; 422 `GW_EVENT_INVALID` (amplop salah, tipe tidak diterima, field di luar allowlist,
   kanal ganda); 503 `GW_NOT_READY`. Bentuk galat `{"error": {"code", "message", "trace_id"}}`.
+
+Kontrak `PUT /internal/v1/secrets/{key}` (dari config lewat proksi admin, HMAC layanan `config`):
+
+- Body `{"value": "<rahasia>"}` (1-4096 karakter, field lain ditolak). Respons 204 tanpa isi; nilai tidak pernah dicatat,
+  dikembalikan, atau masuk `gw_audit` (audit hanya memuat nama kunci dan versi).
+- Kunci yang diterima: `telegram.bot_token` (format `<angka>:<30+ karakter>`) dan `smtp.password`. Nilai sama dengan yang
+  aktif tidak menulis apa pun (idempoten).
+- Galat: 401 `GW_AUTH_FAILED` (bukan `config`), 404 `GW_KUNCI_TIDAK_DIKENAL`, 409 `GW_DIKUNCI_ENV` (kunci sudah diisi
+  env, env menang), 422 `GW_EVENT_INVALID`, 503 `GW_MASTER_KEY_TIDAK_ADA` (kunci induk belum diisi) atau `GW_NOT_READY`.
+- Penyimpanan: tabel `secret`, AES-256-GCM dengan kunci induk `ASTRIA_GW_MASTER_KEY` (32 byte base64 atau hex),
+  nama kunci sebagai AAD, nonce 12 byte acak per penulisan. Kunci induk salah format menolak start; kunci induk yang
+  tidak cocok dengan isi tabel membuat `/ready` 503 (`kunci_induk_salah`), proses tetap hidup tetapi tidak siap.
+- Adapter membaca rahasia tiap panggilan: rahasia yang baru ditulis berlaku tanpa restart. Token Telegram kosong menghasilkan
+  galat sementara `telegram_token_kosong` (pesan dicoba ulang, lalu `dead` bila tetap kosong).
 
 Kontrak `POST /internal/v1/whatsapp/masuk` (dari `wa-bridge`, hanya listener internal):
 
@@ -71,12 +88,13 @@ Kontrak `POST /internal/v1/whatsapp/masuk` (dari `wa-bridge`, hanya listener int
   (WhatsApp mati); 422 `GW_EVENT_INVALID`; 503 `GW_NOT_READY`.
 
 Konfigurasi (`ASTRIA_GW_*`): `PUBLIC_BIND` (`host:port`), `CORE_URL` (bawaan `http://api:8000`), `CALLER_KEYS_FILE` (JSON
-`{layanan: kunci_hex}`), `SEED_FILE`, `TELEGRAM_BOT_TOKEN` atau `TELEGRAM_BOT_TOKEN_FILE` (kosong = Telegram mati),
+`{layanan: kunci_hex}`), `SEED_FILE`, `TELEGRAM_BOT_TOKEN` atau `TELEGRAM_BOT_TOKEN_FILE` (kosong dan tanpa kunci induk = Telegram mati; token dari config mengisi kemudian),
 `TELEGRAM_CHANNEL_ID` (bawaan `telegram-tim`), `TELEGRAM_POLL_TIMEOUT`, `TELEGRAM_MAX_CHARS`, `WA_BRIDGE_URL` dan
 `WA_BRIDGE_TOKEN_FILE` (salah satu kosong = WhatsApp mati), `WHATSAPP_CHANNEL_ID` (bawaan `wa-tim`),
 `SMTP_HOST` (kosong = email mati),
 `SMTP_PORT`, `SMTP_TLS` (`starttls`, `tls`, `none`), `SMTP_USER`, `SMTP_PASSWORD` atau `SMTP_PASSWORD_FILE`, `SMTP_FROM`,
-`RATE_PER_IDENTITY`, `RATE_GLOBAL`; ditambah `ASTRIA_HOST`, `ASTRIA_PORT`, `ASTRIA_DATABASE_URL`, dan `ASTRIA_SERVICE_KEY`/`_FILE` dari `common`.
+`RATE_PER_IDENTITY`, `RATE_GLOBAL`, `MASTER_KEY` atau `MASTER_KEY_FILE` (kunci induk rahasia, 32 byte base64 atau hex;
+kosong = rahasia tidak bisa ditulis lewat API); ditambah `ASTRIA_HOST`, `ASTRIA_PORT`, `ASTRIA_DATABASE_URL`, dan `ASTRIA_SERVICE_KEY`/`_FILE` dari `common`.
 Token bot dan URL Bot API tidak pernah dicatat (logger `httpx` dibisukan, galat hanya berupa kode).
 
 Format seed:
@@ -98,7 +116,8 @@ Format seed:
 
 Belum dibangun (menyusul): konfirmasi dua langkah T1/T2 (`/label`, `/dfir`, `/jalankan-digest`, `/ya`; tabel
 `pending_confirmation` sudah ada), pairing `/daftar`, `/berhenti`, `/tanya`, grup chat, webhook Telegram dan WhatsApp Cloud API resmi (`wa-bridge` hanya untuk uji), webhook keluar
-dan penjaga SSRF, endpoint admin rahasia/identitas/outbox, penyimpanan rahasia AES-GCM (identitas masih teks biasa dari seed),
+dan penjaga SSRF, endpoint admin identitas dan outbox, rahasia WhatsApp dan webhook (token bridge tetap dari berkas), rotasi kunci
+induk, enkripsi identitas (masih teks biasa dari seed),
 rantai hash `gw_audit`, retensi, dan terowongan demo. Alur perintah ujung ke ujung belum jalan di devenv karena endpoint identity
 dan config yang dibutuhkan Command Facade belum ada.
 

@@ -42,21 +42,26 @@ class Telegram:
 
     def __init__(
         self,
-        token: str,
+        token: str | Callable[[], str],
         *,
         max_chars: int = 3000,
         poll_timeout: int = 30,
         http: httpx.AsyncClient | None = None,
     ) -> None:
+        """`token` berupa nilai tetap atau fungsi yang dibaca tiap panggilan (rahasia yang diubah berlaku segera)."""
+        self._token = token if callable(token) else (lambda: token)
         self._max_chars = max_chars
         self._poll_timeout = poll_timeout
         self.last_error: str | None = None
-        # URL dasar memuat token: logger `httpx` dibisukan di main, dan galat httpx tidak pernah diteruskan.
-        self._http = http or make_client(f"{TELEGRAM_API}/bot{token}/", timeout=poll_timeout + 10)
+        # Token ada di path, bukan di URL dasar: httpx tidak mencatatnya, dan galat hanya memuat nama kelasnya.
+        self._http = http or make_client(TELEGRAM_API, timeout=poll_timeout + 10)
 
     async def _call(self, method: str, payload: dict[str, Any]) -> Any:
+        token = self._token()
+        if not token:
+            raise self._fail(SendError("telegram_token_kosong")) from None
         try:
-            resp = await self._http.post(method, json=payload)
+            resp = await self._http.post(f"/bot{token}/{method}", json=payload)
         except httpx.HTTPError as exc:
             raise self._fail(SendError(f"telegram_transport_{type(exc).__name__}")) from None
         try:
@@ -147,15 +152,15 @@ class Smtp:
         port: int,
         tls: Literal["starttls", "tls", "none"],
         username: str,
-        password: str,
+        password: str | Callable[[], str],
         sender: str,
         send: SendMail = aiosmtplib.send,
     ) -> None:
+        self._password = password if callable(password) else (lambda: password)
         self._options = {
             "hostname": host,
             "port": port,
             "username": username or None,
-            "password": password or None,
             "use_tls": tls == "tls",
             "start_tls": tls == "starttls",
             "timeout": SMTP_TIMEOUT,
@@ -170,7 +175,7 @@ class Smtp:
         message["Subject"] = subject
         message.set_content(text)
         try:
-            await self._send(message, **self._options)
+            await self._send(message, password=self._password() or None, **self._options)
         except aiosmtplib.SMTPRecipientsRefused:
             raise SendError("smtp_penerima_ditolak", permanent=True) from None
         except aiosmtplib.SMTPResponseException as exc:

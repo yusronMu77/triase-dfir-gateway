@@ -1,7 +1,7 @@
 """Tabel gateway (GW§4) lewat SQLAlchemy Core: satu definisi untuk PostgreSQL (server) dan SQLite (lokal).
 
-Kolom dipangkas ke yang dipakai sekarang. Ditunda: tabel `secret` (AES-GCM), `subscription`, hash dan
-ciphertext identitas (`external_id` masih teks biasa dari berkas seed), dan rantai hash `gw_audit`.
+Kolom dipangkas ke yang dipakai sekarang. Ditunda: `subscription`, hash dan ciphertext identitas (`external_id`
+masih teks biasa dari berkas seed), dan rantai hash `gw_audit`. Tabel `secret` (rahasia AES-GCM, `vault.py`) sudah ada.
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     MetaData,
     Table,
     Text,
@@ -88,6 +89,17 @@ event_inbox = Table(
     Column("event_id", Text, primary_key=True),
     Column("type", Text, nullable=False),
     Column("received_at", DateTime(timezone=True), nullable=False),
+)
+
+# Rahasia kanal: ciphertext AES-256-GCM dengan kunci induk; nama kunci ikut sebagai AAD. Tulis-saja lewat API.
+secret = Table(
+    "secret",
+    metadata,
+    Column("key", Text, primary_key=True),  # contoh: telegram.bot_token
+    Column("ciphertext", LargeBinary, nullable=False),
+    Column("nonce", LargeBinary, nullable=False),  # 12 byte acak per penulisan
+    Column("key_version", Integer, nullable=False),  # versi kunci induk
+    Column("updated_at", DateTime(timezone=True), nullable=False),
 )
 
 poll_state = Table(

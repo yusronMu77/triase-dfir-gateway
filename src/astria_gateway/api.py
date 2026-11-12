@@ -4,12 +4,16 @@ Autentikasi: HMAC per permintaan `astria_common.hmac_auth` (header X-Astria-Serv
 detik, nonce sekali pakai). Kunci pemanggil dari `ASTRIA_GW_CALLER_KEYS_FILE`; tiap endpoint membatasi layanannya.
 Pengecualian: `POST /whatsapp/masuk` dari `wa-bridge` (Node, khusus uji) memakai Bearer token bersama.
 Galat memakai bentuk `{"error": {"code", "message", "trace_id"}}` dengan kode GW§3.7.
+
+`POST /events` juga menerima `identity.revoked` (kontrol, `channel_id` "*"): ikatan kanal pengguna itu dicabut.
+`PUT /secrets/{key}` (hanya `config`) menulis rahasia kanal lewat `vault.SecretVault`; respons 204 tanpa nilai.
 """
 
 from __future__ import annotations
 
 import hmac
 import json
+import re
 from collections.abc import Awaitable, Callable
 from datetime import datetime
 from pathlib import Path
@@ -21,21 +25,27 @@ from astria_common.errors import AstriaError
 from astria_common.hmac_auth import H_SERVICE, HmacError
 from astria_common.log import get_logger
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from prometheus_client import Counter
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 
 from astria_gateway.channels import WHATSAPP_MAX_CHARS
 from astria_gateway.outbox import enqueue
 from astria_gateway.render import ALLOWED_FIELDS, render_event
 from astria_gateway.store import audit, channel_config, channel_identity, event_inbox, now, outbox_message
+from astria_gateway.vault import SECRET_CHANNELS, TELEGRAM_TOKEN, SecretVault, VaultError
 
 log = get_logger(__name__)
 
 EVENTS_TOTAL = Counter("gw_events_received_total", "Event dari notifier", ["type", "result"])
 REPLAY_REASONS = frozenset({"cap_waktu_di_luar_jendela", "nonce_terpakai"})
+IDENTITY_REVOKED = "identity.revoked"
+REVOKE_CHANNEL = "*"
+REVOKE_FIELDS = frozenset({"user_id", "reason", "revoked_at"})
+REVOKE_REASONS = frozenset({"akun_nonaktif", "peran_berubah", "kata_sandi_diganti", "sesi_dicabut"})
+USER_ID = re.compile(r"^usr_[A-Za-z0-9]+$")
 
 router = APIRouter(prefix="/internal/v1", tags=["gateway"])
 
@@ -83,7 +93,7 @@ Value = Text | int | float | bool | None | Annotated[list[Annotated[str, Field(m
 
 class ChannelPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    channel_id: str = Field(pattern=r"^[a-z][a-z0-9_-]{0,63}$")
+    channel_id: str = Field(pattern=r"^(\*|[a-z][a-z0-9_-]{0,63})$")
     payload: dict[str, Value] = Field(default_factory=dict, max_length=20)
 
 
@@ -93,6 +103,11 @@ class EventIn(BaseModel):
     type: str = Field(max_length=64)
     occurred_at: datetime
     channels: list[ChannelPayload] = Field(default_factory=list, max_length=20)
+
+
+class SecretIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    value: str = Field(min_length=1, max_length=4096)
 
 
 async def _invalid(db: Database, event_type: str, message: str, **detail: Any) -> AstriaError:
@@ -110,6 +125,8 @@ async def receive_event(request: Request, _caller: Annotated[str, Depends(requir
         event = EventIn.model_validate_json(await request.body())
     except ValidationError:
         raise await _invalid(db, "lainnya", "amplop event tidak valid") from None
+    if event.type == IDENTITY_REVOKED:
+        return await _revoke(db, event)
     allowed = ALLOWED_FIELDS.get(event.type)
     if allowed is None:
         raise await _invalid(db, event.type, "tipe event tidak diterima", event_id=event.event_id)
@@ -155,6 +172,64 @@ async def receive_event(request: Request, _caller: Annotated[str, Depends(requir
         raise AstriaError("GW_EVENT_DUPLICATE", "event_id sudah diterima", 409) from None
     EVENTS_TOTAL.labels(event.type, "ok").inc()
     return JSONResponse({"event_id": event.event_id, "messages": messages}, status_code=202)
+
+
+async def _revoke(db: Database, event: EventIn) -> JSONResponse:
+    """Cabut semua ikatan kanal aktif milik `user_id`. Event ulang ditolak 409 (`event_inbox`), jadi tidak berulang."""
+    if [c.channel_id for c in event.channels] != [REVOKE_CHANNEL]:
+        raise await _invalid(db, event.type, "identity.revoked harus memuat satu kanal '*'", event_id=event.event_id)
+    payload = event.channels[0].payload
+    extra = sorted(set(payload) - REVOKE_FIELDS)
+    if extra:
+        raise await _invalid(db, event.type, "field di luar allowlist", event_id=event.event_id, fields=extra)
+    user_id, reason = payload.get("user_id"), payload.get("reason")
+    if not isinstance(user_id, str) or not USER_ID.fullmatch(user_id) or reason not in REVOKE_REASONS:
+        raise await _invalid(db, event.type, "payload identity.revoked tidak valid", event_id=event.event_id)
+
+    try:
+        async with db.engine.begin() as conn:
+            await conn.execute(event_inbox.insert().values(event_id=event.event_id, type=event.type, received_at=now()))
+            i = channel_identity
+            result = await conn.execute(
+                update(i)
+                .where(i.c.user_id == user_id, i.c.status == "aktif")
+                .values(status="dicabut", updated_at=now())
+            )
+            revoked = int(result.rowcount)
+            await audit(
+                conn, "identity.revoked", event_id=event.event_id, user_id=user_id, reason=reason, identities=revoked
+            )
+    except IntegrityError:
+        EVENTS_TOTAL.labels(event.type, "duplicate").inc()
+        raise AstriaError("GW_EVENT_DUPLICATE", "event_id sudah diterima", 409) from None
+    EVENTS_TOTAL.labels(event.type, "ok").inc()
+    log.info("ikatan_dicabut", event_id=event.event_id, reason=reason, identities=revoked)
+    return JSONResponse({"event_id": event.event_id, "identities": revoked}, status_code=202)
+
+
+@router.put("/secrets/{key}", status_code=204)
+async def put_secret(
+    request: Request, key: str, _caller: Annotated[str, Depends(require_caller("config"))]
+) -> Response:
+    """Tulis rahasia kanal dari proksi admin config. Nilai tidak pernah dicatat atau dikembalikan."""
+    _db(request)
+    vault: SecretVault | None = request.app.state.vault
+    if vault is None:
+        raise AstriaError("GW_NOT_READY", "basis data gateway belum siap", 503)
+    if key not in SECRET_CHANNELS:
+        raise AstriaError("GW_KUNCI_TIDAK_DIKENAL", "kunci rahasia tidak dikenal", 404)
+    try:
+        body = SecretIn.model_validate_json(await request.body())
+    except ValidationError:
+        raise AstriaError("GW_EVENT_INVALID", "nilai rahasia tidak valid", 422) from None
+    value = body.value.strip()
+    if not value or (key == "telegram.bot_token" and not TELEGRAM_TOKEN.fullmatch(value)):
+        raise AstriaError("GW_EVENT_INVALID", "nilai rahasia tidak valid", 422)
+    try:
+        await vault.put(key, value)
+    except VaultError as exc:
+        raise AstriaError(exc.code, exc.message, exc.status) from None
+    return Response(status_code=204)
 
 
 class WhatsAppIn(BaseModel):
