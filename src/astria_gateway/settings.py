@@ -35,6 +35,8 @@ class Settings(AstriaSettings):
     gw_seed_file: Path | None = None
     """Berkas JSON kanal dan identitas awal (belum ada endpoint admin)."""
 
+    gw_telegram_enabled: bool = True
+    """`false` = kanal Telegram tidak dipakai sama sekali (adapter dan poller tidak dipasang), walau kunci induk ada."""
     gw_telegram_bot_token: SecretStr | None = None
     gw_telegram_bot_token_file: Path | None = None
     """Token bot Telegram. Kosong = adapter dan poller Telegram mati."""

@@ -1,3 +1,5 @@
+import base64
+
 import pytest
 from astria_common.envguard import EnvironmentGuardError
 from fastapi.testclient import TestClient
@@ -41,6 +43,14 @@ def test_empty_token_file_disables_telegram(tmp_path) -> None:
     token_file.write_text("")
     settings = Settings(env="test", gw_telegram_bot_token_file=token_file)
     assert build_app(settings).state.adapters == {}
+
+
+def test_telegram_can_be_switched_off_even_with_vault_key(tmp_path) -> None:
+    db = SecretStr(f"sqlite+aiosqlite:///{tmp_path}/gateway_test.db")
+    key = SecretStr(base64.b64encode(bytes(range(32))).decode())
+    assert "telegram" in build_app(Settings(env="test", database_url=db, gw_master_key=key)).state.adapters
+    app = build_app(Settings(env="test", database_url=db, gw_master_key=key, gw_telegram_enabled=False))
+    assert app.state.poller is None and "telegram" not in app.state.adapters
 
 
 def test_invalid_seed_refuses_to_start(tmp_path) -> None:
