@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- `/antrean` tidak lagi menerima argumen band: Command Facade api (`queue`) menolak argumen apa pun, sehingga `/antrean <band>` selalu gagal "argumen perintah tidak sesuai". Teks bantuan disesuaikan.
+
 ### Added
 
 - `ASTRIA_GW_TELEGRAM_ENABLED` (bawaan `true`): `false` mematikan adapter dan poller Telegram walau kunci induk vault ada, untuk lingkungan yang hanya memakai surel dan WhatsApp (keputusan PM 2026-11-12). Tanpa ini Telegram terpasang menunggu token dari config dan `/health` gateway selalu `degraded`.

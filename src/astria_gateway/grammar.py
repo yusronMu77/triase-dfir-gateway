@@ -13,7 +13,6 @@ from dataclasses import dataclass
 CARD_ID = re.compile(r"IC-[0-9]{8}-[0-9]{3,6}")
 PAIRING_CODE = re.compile(r"[A-Za-z0-9]{6,12}")
 CONFIRM_CODE = re.compile(r"[0-9]{4}")
-BANDS = frozenset({"RENDAH", "SEDANG", "TINGGI", "KRITIS"})
 LABELS = {"benar": "benar", "salah": "salah_positif", "dfir": "perlu_dfir"}
 MAX_TEXT = 300
 MAX_NOTE = 200
@@ -41,10 +40,8 @@ def _one(pattern: re.Pattern[str], key: str) -> ArgRule:
 
 
 def _queue(tokens: list[str]) -> dict[str, str] | None:
-    if not tokens:
-        return {}
-    band = tokens[0].upper()
-    return {"band": band} if len(tokens) == 1 and band in BANDS else None
+    # Command Facade api (`queue`) tidak menerima argumen; filter band belum ada di ticket.
+    return {} if not tokens else None
 
 
 def _label(tokens: list[str]) -> dict[str, str] | None:
