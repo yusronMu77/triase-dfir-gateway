@@ -85,6 +85,12 @@ export class WhatsApp {
     return sent?.key?.id ?? null
   }
 
+  /** Putuskan tautan perangkat (seperti "Keluar" di HP); `#onConnection` lalu menghapus sesi dan memunculkan QR baru. */
+  async logout() {
+    if (!this.connected) throw new NotConnected()
+    await this.sock.logout()
+  }
+
   stop() {
     this.stopping = true
     this.sock?.end(undefined)

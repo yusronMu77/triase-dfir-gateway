@@ -18,6 +18,7 @@ from helpers import WA_NUMBER, CoreFake, facade, gateway_settings, outbox_rows, 
 from sqlalchemy import select
 
 from astria_gateway import render
+from astria_gateway.channels import WhatsApp
 from astria_gateway.facade import PAIRING_PATH
 from astria_gateway.inbound import InboundHandler
 from astria_gateway.main import build_app
@@ -209,3 +210,68 @@ def test_api_service_token_is_accepted(gw) -> None:
     assert client.get("/internal/v1/status", headers=bearer).status_code == 200
     assert client.get("/internal/v1/identities", headers={"Authorization": "Bearer tok-notifier"}).status_code == 403
     assert client.get("/internal/v1/identities", headers={"Authorization": "Bearer palsu"}).status_code == 401
+
+
+# ---- tautan bot WhatsApp untuk halaman kanal ----
+
+API_BEARER = {"Authorization": "Bearer tok-api"}
+QR = "data:image/png;base64,iVBORw0KGgo="
+
+
+def _bridge(client: TestClient, handler: Any) -> list[tuple[str, str, str]]:
+    seen: list[tuple[str, str, str]] = []
+
+    def record(request: httpx.Request) -> httpx.Response:
+        seen.append((request.method, request.url.path, request.headers["authorization"]))
+        return handler(request)
+
+    http = httpx.AsyncClient(base_url="http://wa-bridge:3000", transport=httpx.MockTransport(record))
+    client.app.state.adapters["whatsapp"] = WhatsApp("http://wa-bridge:3000", "tok-bridge", http=http)
+    return seen
+
+
+def test_whatsapp_link_returns_status_and_qr(gw) -> None:
+    client, _ = gw
+    body = {"terhubung": False, "perlu_scan": True, "nomor_tersamar": None, "qr": QR}
+    seen = _bridge(client, lambda _r: httpx.Response(200, json=body))
+    resp = client.get("/internal/v1/whatsapp/link", headers=API_BEARER)
+    assert resp.status_code == 200 and resp.json() == body
+    assert seen == [("GET", "/tautan", "Bearer tok-bridge")]
+
+
+def test_whatsapp_link_drops_unexpected_values(gw) -> None:
+    client, _ = gw
+    body = {"terhubung": True, "perlu_scan": "ya", "nomor_tersamar": "6281234567890", "qr": "javascript:alert(1)"}
+    _bridge(client, lambda _r: httpx.Response(200, json=body))
+    assert client.get("/internal/v1/whatsapp/link", headers=API_BEARER).json() == {
+        "terhubung": True,
+        "perlu_scan": False,
+        "nomor_tersamar": None,
+        "qr": None,
+    }
+
+
+def test_whatsapp_unlink(gw) -> None:
+    client, db_file = gw
+    seen = _bridge(client, lambda _r: httpx.Response(202, json={"status": "keluar"}))
+    resp = client.post("/internal/v1/whatsapp/link/logout", headers=API_BEARER)
+    assert resp.status_code == 202 and seen == [("POST", "/keluar", "Bearer tok-bridge")]
+    with sqlite3.connect(db_file) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM gw_audit WHERE action='whatsapp.unlinked'").fetchone() == (1,)
+
+    _bridge(client, lambda _r: httpx.Response(409, json={"error": "belum_terhubung"}))
+    assert client.post("/internal/v1/whatsapp/link/logout", headers=API_BEARER).status_code == 409
+
+
+def test_whatsapp_link_errors_and_auth(gw) -> None:
+    client, _ = gw
+    assert client.get("/internal/v1/whatsapp/link", headers=API_BEARER).status_code == 404  # tanpa wa-bridge
+
+    def down(_r: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("mati")
+
+    _bridge(client, down)
+    assert client.get("/internal/v1/whatsapp/link", headers=API_BEARER).status_code == 503
+    assert client.post("/internal/v1/whatsapp/link/logout", headers=API_BEARER).status_code == 503
+    notifier = {"Authorization": "Bearer tok-notifier"}
+    assert client.get("/internal/v1/whatsapp/link", headers=notifier).status_code == 403

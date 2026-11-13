@@ -1,5 +1,5 @@
-// Jembatan WhatsApp Web untuk Astria Gateway (khusus uji): GET /qr, GET /status, POST /kirim, dan
-// penerusan pesan masuk ke gateway. Lihat README untuk risiko klien tidak resmi.
+// Jembatan WhatsApp Web untuk Astria Gateway (khusus uji): GET /qr, GET /status, POST /kirim, GET /tautan,
+// POST /keluar, dan penerusan pesan masuk ke gateway. Lihat README untuk risiko klien tidak resmi.
 import { readFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import pino from 'pino'
@@ -90,6 +90,26 @@ async function kirim(req, res) {
   }
 }
 
+// Untuk halaman kanal admin lewat gateway: status dan QR (data URL PNG) hanya dengan token, bukan lewat /qr terbuka.
+async function tautan(req, res) {
+  if (!tokenMatches(req.headers.authorization, token)) return send(res, 401, { error: 'token_tidak_valid' })
+  const qr = !wa.connected && wa.qr ? await qrImage(wa.qr) : null
+  return send(res, 200, { ...status(), qr })
+}
+
+async function keluar(req, res) {
+  if (!tokenMatches(req.headers.authorization, token)) return send(res, 401, { error: 'token_tidak_valid' })
+  try {
+    await wa.logout()
+  } catch (err) {
+    if (err instanceof NotConnected) return send(res, 409, { error: 'belum_terhubung' })
+    log.warn({ err: err?.constructor?.name }, 'keluar_gagal')
+    return send(res, 502, { error: 'gagal_keluar' })
+  }
+  log.info('keluar_diminta')
+  return send(res, 202, { status: 'keluar' })
+}
+
 const server = createServer(async (req, res) => {
   const path = new URL(req.url, 'http://bridge').pathname
   try {
@@ -99,6 +119,8 @@ const server = createServer(async (req, res) => {
       return send(res, 200, await qrPage(), 'text/html; charset=utf-8', { 'content-security-policy': csp, 'x-frame-options': 'DENY' })
     }
     if (req.method === 'POST' && path === '/kirim') return await kirim(req, res)
+    if (req.method === 'GET' && path === '/tautan') return await tautan(req, res)
+    if (req.method === 'POST' && path === '/keluar') return await keluar(req, res)
     return send(res, 404, { error: 'tidak_ada' })
   } catch (err) {
     if (err instanceof InputError) return send(res, err.message === 'body_terlalu_besar' ? 413 : 400, { error: err.message })

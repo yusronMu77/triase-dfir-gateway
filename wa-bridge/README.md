@@ -22,6 +22,8 @@ Gateway mengirim notifikasi dan balasan perintah lewat `POST /kirim`; pesan teks
 | `GET /qr` | - | Halaman QR (segar tiap 5 detik), atau "Terhubung ke 62812****5678" |
 | `GET /status` | - | `{"terhubung", "perlu_scan", "nomor_tersamar"}` |
 | `POST /kirim` | `Authorization: Bearer <token>` | Body `{"ke": "628...", "teks": "..."}` (`ke` 8-15 digit, `teks` maks 4000 karakter, body maks 16 KiB). 200 `{"id"}`; 400 input salah; 401 token salah; 413 body terlalu besar; 503 belum terhubung; 502 gagal kirim |
+| `GET /tautan` | `Authorization: Bearer <token>` | `{"terhubung", "perlu_scan", "nomor_tersamar", "qr"}`; `qr` data URL PNG saat perlu pindai, selain itu `null`. Dipakai gateway untuk halaman Kanal di web |
+| `POST /keluar` | `Authorization: Bearer <token>` | Putuskan tautan perangkat (seperti Keluar di HP): sesi dihapus, QR baru muncul. 202; 409 belum terhubung; 502 gagal |
 
 Pesan masuk: hanya teks dari chat pribadi (bukan grup, status, newsletter, atau pesan sendiri), diteruskan sebagai
 `{"id", "dari", "teks", "waktu"}` dengan token yang sama; galat jaringan, 429, dan 5xx diulang 4 kali dengan jeda naik

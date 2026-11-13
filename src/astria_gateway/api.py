@@ -9,6 +9,8 @@ Galat memakai bentuk `{"error": {"code", "message", "trace_id"}}` dengan kode GW
 `PUT /secrets/{key}` (hanya `config`) menulis rahasia kanal lewat `vault.SecretVault`; respons 204 tanpa nilai.
 `GET /identities` dan `DELETE /identities/{id}` (`api`, `config`): daftar dan cabut ikatan kanal; ID chat atau nomor
 tidak pernah dikembalikan.
+`GET /whatsapp/link` dan `POST /whatsapp/link/logout` (`api`, `config`): status tautan bot WhatsApp beserta QR, dan
+putuskan tautan, lewat wa-bridge.
 api memanggil dengan token layanan EdDSA dari identity (audiens `svc:gateway`); notifier dan config dengan HMAC.
 """
 
@@ -35,7 +37,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 
-from astria_gateway.channels import WHATSAPP_MAX_CHARS
+from astria_gateway.channels import WHATSAPP_MAX_CHARS, SendError, WhatsApp
 from astria_gateway.outbox import enqueue
 from astria_gateway.render import ALLOWED_FIELDS, render_event
 from astria_gateway.store import audit, channel_config, channel_identity, event_inbox, now, outbox_message
@@ -50,6 +52,8 @@ REVOKE_CHANNEL = "*"
 REVOKE_FIELDS = frozenset({"user_id", "reason", "revoked_at"})
 REVOKE_REASONS = frozenset({"akun_nonaktif", "peran_berubah", "kata_sandi_diganti", "sesi_dicabut"})
 USER_ID = re.compile(r"^usr_[A-Za-z0-9]+$")
+QR_DATA_URL = re.compile(r"^data:image/png;base64,[A-Za-z0-9+/=]{1,20000}$")
+MASKED_NUMBER = re.compile(r"^[0-9]{2,5}\*{4}[0-9]{2,4}$")
 
 AUDIENCE = "svc:gateway"
 
@@ -325,3 +329,49 @@ async def revoke_identity(
             )
             await audit(conn, "identity.binding_revoked", identity_id=identity_id, caller=caller)
     return Response(status_code=204)
+
+
+def _whatsapp(request: Request) -> WhatsApp:
+    wa = request.app.state.adapters.get("whatsapp")
+    if not isinstance(wa, WhatsApp):
+        raise AstriaError("GW_CHANNEL_UNKNOWN", "kanal WhatsApp tidak aktif", 404)
+    return wa
+
+
+async def _bridge(request: Request, method: str, path: str) -> Any:
+    try:
+        return await _whatsapp(request).bridge(method, path)
+    except SendError:
+        raise AstriaError("GW_WA_BRIDGE_DOWN", "jembatan WhatsApp tidak terjangkau", 503) from None
+
+
+@router.get("/whatsapp/link")
+async def whatsapp_link(request: Request, _caller: Annotated[str, Depends(require_caller("api", "config"))]) -> dict:
+    """Status tautan bot dan QR untuk dipindai dari halaman kanal admin. Nomor hanya tersamar."""
+    resp = await _bridge(request, "GET", "/tautan")
+    try:
+        data = resp.json() if resp.status_code == 200 else None
+    except ValueError:
+        data = None
+    if not isinstance(data, dict):
+        raise AstriaError("GW_WA_BRIDGE_DOWN", "jembatan WhatsApp tidak terjangkau", 503)
+    qr, number = data.get("qr"), data.get("nomor_tersamar")
+    return {
+        "terhubung": data.get("terhubung") is True,
+        "perlu_scan": data.get("perlu_scan") is True,
+        "nomor_tersamar": number if isinstance(number, str) and MASKED_NUMBER.fullmatch(number) else None,
+        "qr": qr if isinstance(qr, str) and QR_DATA_URL.fullmatch(qr) else None,
+    }
+
+
+@router.post("/whatsapp/link/logout", status_code=202)
+async def whatsapp_unlink(request: Request, caller: Annotated[str, Depends(require_caller("api", "config"))]) -> dict:
+    """Putuskan tautan bot; wa-bridge menghapus sesi lalu menampilkan QR baru."""
+    resp = await _bridge(request, "POST", "/keluar")
+    if resp.status_code == 409:
+        raise AstriaError("GW_WA_BELUM_TERHUBUNG", "bot WhatsApp belum tertaut", 409)
+    if resp.status_code != 202:
+        raise AstriaError("GW_WA_BRIDGE_DOWN", "jembatan WhatsApp tidak terjangkau", 503)
+    async with _db(request).engine.begin() as conn:
+        await audit(conn, "whatsapp.unlinked", caller=caller)
+    return {"status": "keluar"}
