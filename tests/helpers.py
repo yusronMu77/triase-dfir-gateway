@@ -96,16 +96,26 @@ CARD = {"card_id": "IC-20261110-003", "band": "KRITIS", "skor": 71}
 class CoreFake:
     """api tiruan: memeriksa tanda tangan HMAC `gateway`, mencatat permintaan, membalas `response`."""
 
-    def __init__(self, response: httpx.Response | None = None) -> None:
+    def __init__(
+        self,
+        response: httpx.Response | None = None,
+        by_path: dict[str, httpx.Response | Exception] | None = None,
+    ) -> None:
         self.requests: list[dict[str, Any]] = []
+        self.paths: list[str] = []
         self.response = response or httpx.Response(200, json={"command": "card", "ok": True, "hasil": CARD})
+        self.by_path = by_path or {}
         self.nonces = NonceCache()
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         assert request.headers["X-Astria-Service"] == "gateway"
         verify(GATEWAY_KEY, request.method, request.url.path, request.headers, request.content, self.nonces)
         self.requests.append(json.loads(request.content))
-        return self.response
+        self.paths.append(request.url.path)
+        reply = self.by_path.get(request.url.path, self.response)
+        if isinstance(reply, Exception):
+            raise reply
+        return reply
 
 
 def facade(core: CoreFake | None) -> Any:

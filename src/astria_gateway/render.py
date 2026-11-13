@@ -30,7 +30,13 @@ HELP = "\n".join(
         "/bantuan - daftar perintah ini",
     ]
 )
-NOT_REGISTERED = "Akun chat ini tidak terdaftar di Astria. Minta admin menghubungkan akun Anda."
+NOT_REGISTERED = (
+    "Akun chat ini belum terhubung ke Astria. Terbitkan kode pairing di halaman Identitas web Astria, "
+    "lalu kirim /daftar <kode>."
+)
+PAIRED = "Akun chat ini kini terhubung ke Astria. Ketik /bantuan untuk daftar perintah."
+PAIRING_FAILED = "Kode pairing tidak valid, sudah dipakai, atau kedaluwarsa. Terbitkan kode baru di web Astria."
+ALREADY_PAIRED = "Akun chat ini sudah terhubung ke Astria."
 RATE_LIMITED = "Terlalu banyak perintah. Coba lagi dalam satu menit."
 CORE_DOWN = "Sistem inti tidak tersedia, coba lagi nanti."
 NO_PENDING = "Tidak ada perintah yang menunggu konfirmasi."

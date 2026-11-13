@@ -7,6 +7,8 @@ Galat memakai bentuk `{"error": {"code", "message", "trace_id"}}` dengan kode GW
 
 `POST /events` juga menerima `identity.revoked` (kontrol, `channel_id` "*"): ikatan kanal pengguna itu dicabut.
 `PUT /secrets/{key}` (hanya `config`) menulis rahasia kanal lewat `vault.SecretVault`; respons 204 tanpa nilai.
+`GET /identities` dan `DELETE /identities/{id}` (`api`, `config`): daftar dan cabut ikatan kanal; ID chat atau nomor
+tidak pernah dikembalikan.
 """
 
 from __future__ import annotations
@@ -277,3 +279,42 @@ async def status(
         "email": {"enabled": "email" in state.adapters},
         "public_listener": bool(state.settings.gw_public_bind),
     }
+
+
+@router.get("/identities")
+async def list_identities(request: Request, _caller: Annotated[str, Depends(require_caller("api", "config"))]) -> dict:
+    i = channel_identity
+    query = select(i.c.identity_id, i.c.user_id, i.c.channel_id, i.c.status, i.c.updated_at).order_by(
+        i.c.updated_at.desc(), i.c.identity_id
+    )
+    async with _db(request).engine.connect() as conn:
+        rows = (await conn.execute(query)).all()
+    items = [
+        {
+            "id": r.identity_id,
+            "user_id": r.user_id,
+            "channel_id": r.channel_id,
+            "status": r.status,
+            "updated_at": r.updated_at.isoformat(),
+        }
+        for r in rows
+    ]
+    return {"items": items}
+
+
+@router.delete("/identities/{identity_id}", status_code=204)
+async def revoke_identity(
+    request: Request, identity_id: str, caller: Annotated[str, Depends(require_caller("api", "config"))]
+) -> Response:
+    """Cabut satu ikatan kanal (idempoten). Pesan yang masih antre gagal permanen saat dikirim."""
+    i = channel_identity
+    async with _db(request).engine.begin() as conn:
+        status = await conn.scalar(select(i.c.status).where(i.c.identity_id == identity_id))
+        if status is None:
+            raise AstriaError("GW_IDENTITY_UNKNOWN", "identitas tidak ditemukan", 404)
+        if status != "dicabut":
+            await conn.execute(
+                update(i).where(i.c.identity_id == identity_id).values(status="dicabut", updated_at=now())
+            )
+            await audit(conn, "identity.binding_revoked", identity_id=identity_id, caller=caller)
+    return Response(status_code=204)

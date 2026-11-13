@@ -3,13 +3,15 @@
 Urutan per pesan: dedupe `inbound_message` -> batas laju global kanal -> identitas terikat (chat pribadi) ->
 batas laju per identitas -> tata bahasa tertutup -> Command Facade (hanya T0) -> balasan lewat outbox.
 Pengirim tak dikenal mendapat satu balasan tetap per 10 menit, dikirim langsung (tidak ada identitas untuk outbox).
-Ditunda: konfirmasi T1/T2 (`/ya`), pairing `/daftar`, `/berhenti`, dan grup chat.
+Pengirim tak dikenal boleh `/daftar <kode>`: kode diklaim lewat api (`/svc/v1/pairing/claim`), lalu chat diikat ke
+pemilik kode (GW§3.3). Ditunda: konfirmasi T1/T2 (`/ya`), `/berhenti`, dan grup chat.
 """
 
 from __future__ import annotations
 
 import contextlib
 import hashlib
+import secrets
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -18,6 +20,7 @@ from astria_common.log import get_logger
 from prometheus_client import Counter
 from sqlalchemy import Update, select, update
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncConnection
 
 from astria_gateway import grammar, render
 from astria_gateway.channels import SendError
@@ -31,6 +34,7 @@ log = get_logger(__name__)
 INBOUND_TOTAL = Counter("gw_inbound_total", "Pesan masuk dari chat", ["channel_type", "result"])
 
 UNKNOWN_REPLY_PER_SECONDS = 600  # satu balasan "tidak terdaftar" per 10 menit per chat
+PAIRING_ATTEMPTS = 5  # percobaan /daftar per chat per 10 menit (sama dengan batas identity per external_id_hash)
 
 SendDirect = Callable[[str, str, str], Awaitable[None]]
 
@@ -60,6 +64,7 @@ class InboundHandler:
         self._per_identity = RateLimiter(rate_per_identity, 60)
         self._global = RateLimiter(rate_global, 60)
         self._unknown = RateLimiter(1, UNKNOWN_REPLY_PER_SECONDS)
+        self._pairing = RateLimiter(PAIRING_ATTEMPTS, UNKNOWN_REPLY_PER_SECONDS)
 
     async def handle(self, msg_id: str, sender: str | None, text: str | None) -> None:
         """`sender` None = bukan chat pribadi atau bukan teks; pesan dicatat lalu diabaikan."""
@@ -84,7 +89,11 @@ class InboundHandler:
             return
 
         identity = await self._identity(sender)
+        command = grammar.parse(text)
         if identity is None:
+            if command is not None and command.tier == "pairing":
+                await self._pair(msg_id, sender, command.args["kode"])
+                return
             await self._finish(msg_id, "ditolak", audit_action="sender.unknown", sender=sender_hash(self.kind, sender))
             INBOUND_TOTAL.labels(self.kind, "unknown_sender").inc()
             if self._unknown.allow(sender):
@@ -96,7 +105,6 @@ class InboundHandler:
         if not self._per_identity.allow(identity_id):
             reply, command_name, result = render.RATE_LIMITED, None, "rate_limited"
         else:
-            command = grammar.parse(text)
             command_name = command.name if command else None
             reply = await self._reply(command, user_id, msg_id)
             result = "ok" if command else "grammar"
@@ -117,6 +125,8 @@ class InboundHandler:
             return render.HELP
         if command.tier == "konfirmasi":
             return render.NO_PENDING
+        if command.tier == "pairing":
+            return render.ALREADY_PAIRED
         if command.tier != "T0" or command.facade is None:
             return render.not_available(command.name)
         if self._facade is None:
@@ -133,6 +143,55 @@ class InboundHandler:
             log.info("perintah_gagal", command=command.facade, unavailable=exc.unavailable)
             return render.CORE_DOWN if exc.unavailable else render.core_rejected(exc.message)
         return render.render_result(command.name, hasil)
+
+    async def _pair(self, msg_id: str, sender: str, code: str) -> None:
+        if not self._pairing.allow(sender):
+            return await self._reject_pairing(msg_id, sender, render.RATE_LIMITED)
+        if self._facade is None:
+            return await self._reject_pairing(msg_id, sender, render.CORE_DOWN)
+        try:
+            user_id = await self._facade.claim_pairing(
+                code=code.upper(), channel_id=self.channel_id, external_id=sender
+            )
+        except FacadeError as exc:
+            log.info("pairing_gagal", status=exc.status, unavailable=exc.unavailable)
+            reply = render.CORE_DOWN if exc.unavailable else render.PAIRING_FAILED
+            return await self._reject_pairing(msg_id, sender, render.RATE_LIMITED if exc.status == 429 else reply)
+        async with self._db.engine.begin() as conn:
+            identity_id = await self._bind(conn, sender, user_id)
+            who = sender_hash(self.kind, sender)
+            await audit(conn, "identity.paired", channel_id=self.channel_id, identity_id=identity_id, sender=who)
+            await enqueue(
+                conn,
+                event_id=f"in:{msg_id}",
+                channel_id=self.channel_id,
+                recipient_ref=identity_id,
+                subject="",
+                body=render.PAIRED,
+            )
+            await conn.execute(self._mark(msg_id, "selesai", identity_id=identity_id, command="daftar"))
+        INBOUND_TOTAL.labels(self.kind, "paired").inc()
+
+    async def _reject_pairing(self, msg_id: str, sender: str, reply: str) -> None:
+        INBOUND_TOTAL.labels(self.kind, "pairing_failed").inc()
+        await self._finish(msg_id, "ditolak", audit_action="pairing.failed", sender=sender_hash(self.kind, sender))
+        with contextlib.suppress(SendError):
+            await self._send_direct(sender, "", reply)
+
+    async def _bind(self, conn: AsyncConnection, sender: str, user_id: str) -> str:
+        """Ikat chat ke `user_id`; ikatan lama yang dicabut untuk chat yang sama diaktifkan ulang."""
+        i = channel_identity
+        values = {"user_id": user_id, "status": "aktif", "updated_at": now()}
+        where = (i.c.channel_id == self.channel_id, i.c.external_id == sender)
+        existing = await conn.scalar(select(i.c.identity_id).where(*where))
+        if existing is not None:
+            await conn.execute(update(i).where(i.c.identity_id == existing).values(values))
+            return existing
+        identity_id = f"idt_{secrets.token_hex(8)}"
+        await conn.execute(
+            i.insert().values(identity_id=identity_id, channel_id=self.channel_id, external_id=sender, **values)
+        )
+        return identity_id
 
     async def _identity(self, sender: str) -> tuple[str, str] | None:
         i = channel_identity
