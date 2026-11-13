@@ -66,7 +66,9 @@ test('normalizeInbound: pesan teks pribadi', () => {
   assert.equal(normalizeInbound(msg({}, { conversation: 'x'.repeat(5000) })).teks.length, MAX_TEXT_CHARS)
 })
 
-test('normalizeInbound: LID memakai senderPn', () => {
+test('normalizeInbound: LID memakai remoteJidAlt atau senderPn', () => {
+  const v7 = normalizeInbound(msg({ remoteJid: '123456789012345@lid', remoteJidAlt: '6281200000003@s.whatsapp.net' }))
+  assert.equal(v7.dari, '6281200000003')
   const lid = normalizeInbound(msg({ remoteJid: '123456789012345@lid', senderPn: '6281200000002@s.whatsapp.net' }))
   assert.equal(lid.dari, '6281200000002')
   assert.equal(normalizeInbound(msg({ remoteJid: '123456789012345@lid' })), null)

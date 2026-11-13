@@ -1,7 +1,7 @@
 // Sesi WhatsApp Web lewat Baileys: QR, sambung ulang, kirim teks, dan pesan masuk.
 import { rm } from 'node:fs/promises'
 import { join } from 'node:path'
-import makeWASocket, { Browsers, DisconnectReason, fetchLatestWaWebVersion, useMultiFileAuthState } from '@whiskeysockets/baileys'
+import makeWASocket, { Browsers, DisconnectReason, fetchLatestWaWebVersion, makeCacheableSignalKeyStore, useMultiFileAuthState } from '@whiskeysockets/baileys'
 import { jidToDigits, normalizeInbound } from './lib.js'
 
 export class NotConnected extends Error {}
@@ -26,10 +26,23 @@ export class WhatsApp {
     const [{ state, saveCreds }, version] = await Promise.all([useMultiFileAuthState(this.sessionDir), this.version])
     // Log Baileys hanya level error dan tanpa JID: log debug-nya memuat isi pesan dan nomor.
     const logger = this.log.child({ mod: 'baileys' }, { level: 'error', redact: { paths: ['key', 'jid', 'attrs', 'msg', 'node'], remove: true } })
-    const sock = makeWASocket({ version, auth: state, logger, browser: Browsers.ubuntu('Astria'), markOnlineOnConnect: false, syncFullHistory: false })
+    const sock = makeWASocket({
+      version,
+      // Cache kunci Signal yang dianjurkan Baileys: mengurangi baca-tulis berkas sesi.
+      auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, logger) },
+      logger,
+      browser: Browsers.ubuntu('Astria'),
+      markOnlineOnConnect: false,
+      syncFullHistory: false,
+    })
     this.sock = sock
     sock.ev.on('creds.update', saveCreds)
     sock.ev.on('connection.update', (update) => this.#onConnection(sock, update))
+    sock.ev.on('messages.update', (updates) => {
+      for (const { key, update } of updates) {
+        if (key.fromMe && update.status) this.log.info({ id: key.id, status: update.status }, 'status_kirim')
+      }
+    })
     sock.ev.on('messages.upsert', ({ messages, type }) => {
       if (type !== 'notify') return
       for (const msg of messages) {

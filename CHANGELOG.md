@@ -4,6 +4,9 @@
 
 ### Fixed
 
+- wa-bridge: Baileys 6.7.24 (tag npm `legacy`) diganti 7.0.0-rc14. WhatsApp kini memakai sesi Signal beralamat LID, sehingga dengan 6.7.24 setiap pesan keluar gagal didekripsi HP pada percobaan pertama dan baru sampai setelah 2-4 permintaan kirim ulang. Sesi tertaut lama dimigrasi otomatis (tanpa pindai QR ulang). Pesan masuk beralamat LID memakai nomor dari `remoteJidAlt`. libsignal diambil dari registry npm (bukan git).
+- wa-bridge: kunci Signal dibungkus `makeCacheableSignalKeyStore` agar baca-tulis berkas sesi berkurang (sebelumnya 134 galat `Bad MAC` dan 12 putus `badSession` 500 dalam 20 jam). Log `status_kirim` (hanya id pesan) untuk memantau pengiriman.
+- wa-bridge: libsignal tidak lagi mencetak isi sesi Signal (termasuk kunci privat ratchet) ke log kontainer; output `console` dibungkam dan `console.error` dicatat sebagai teks pendek lewat pino.
 - `/antrean` tidak lagi menerima argumen band: Command Facade api (`queue`) menolak argumen apa pun, sehingga `/antrean <band>` selalu gagal "argumen perintah tidak sesuai". Teks bantuan disesuaikan.
 
 ### Added

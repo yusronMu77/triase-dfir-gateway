@@ -15,7 +15,7 @@ Astria Gateway (A10): aplikasi mandiri di DMZ untuk kanal dan bot; hanya /hooks/
 ## Tech stack
 
 Python 3.14, FastAPI, Uvicorn (dua listener), SQLAlchemy Core (PostgreSQL di server, SQLite lokal; gateway#2), httpx, aiosmtplib, uv.
-Jembatan WhatsApp uji `wa-bridge/`: Node 24, Baileys 6.7.24, `node:http`, npm (lihat [wa-bridge/README.md](wa-bridge/README.md)).
+Jembatan WhatsApp uji `wa-bridge/`: Node 24, Baileys 7.0.0-rc14, `node:http`, npm (lihat [wa-bridge/README.md](wa-bridge/README.md)).
 
 ## Perintah
 

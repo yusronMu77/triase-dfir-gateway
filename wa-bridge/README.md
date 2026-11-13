@@ -1,6 +1,6 @@
 # wa-bridge (khusus uji)
 
-Jembatan kecil antara Astria Gateway dan WhatsApp Web lewat [Baileys](https://github.com/WhiskeySockets/Baileys) `6.7.24` (MIT).
+Jembatan kecil antara Astria Gateway dan WhatsApp Web lewat [Baileys](https://github.com/WhiskeySockets/Baileys) `7.0.0-rc14` (MIT; memakai libsignal GPL-3.0 dan whatsapp-rust-bridge berbasis WebAssembly).
 Gateway mengirim notifikasi dan balasan perintah lewat `POST /kirim`; pesan teks pribadi yang masuk diteruskan ke gateway
 `POST /internal/v1/whatsapp/masuk`. Keputusan PM 2026-11-10: WhatsApp dipakai untuk **uji** menggantikan Telegram.
 
@@ -25,7 +25,13 @@ Gateway mengirim notifikasi dan balasan perintah lewat `POST /kirim`; pesan teks
 
 Pesan masuk: hanya teks dari chat pribadi (bukan grup, status, newsletter, atau pesan sendiri), diteruskan sebagai
 `{"id", "dari", "teks", "waktu"}` dengan token yang sama; galat jaringan, 429, dan 5xx diulang 4 kali dengan jeda naik
-(1, 2, 4 detik). Isi pesan dan nomor penuh tidak pernah dicatat di log; log Baileys dibatasi level `error`.
+(1, 2, 4 detik). Isi pesan dan nomor penuh tidak pernah dicatat di log; log Baileys dibatasi level `error`, dan output `console`
+libsignal (yang memuat kunci sesi) dibungkam.
+
+Baileys 7 diperlukan karena WhatsApp kini memakai sesi Signal beralamat LID; dengan 6.7.24 setiap pesan gagal didekripsi HP pada
+percobaan pertama ("Waiting for this message"). Permintaan kirim ulang dari HP dijawab cache pesan terbaru bawaan Baileys 7
+(per penerima, hilang saat kontainer dimulai ulang). Log `status_kirim` (2 = sampai server, 3 = sampai HP, 4 = dibaca) hanya
+memuat id pesan.
 
 ## Konfigurasi
 
