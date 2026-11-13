@@ -10,6 +10,8 @@ from typing import Any
 
 import httpx
 import pytest
+from astria_common.auth import ServicePrincipal
+from astria_common.errors import AstriaError
 from astria_common.hmac_auth import signed_headers
 from fastapi.testclient import TestClient
 from helpers import WA_NUMBER, CoreFake, facade, gateway_settings, outbox_rows, ready_client, seeded
@@ -113,6 +115,23 @@ async def test_revoked_chat_is_reactivated_by_new_pairing(db) -> None:
 
 
 @pytest.mark.anyio
+async def test_berhenti_unpairs_own_chat_and_daftar_reconnects(db) -> None:
+    await seeded(db)
+    api, bridge = _api(), Bridge()
+    handler = _handler(db, api, bridge)
+    await handler.handle("U1", WA_NUMBER, "/berhenti")
+    assert (await _identities(db))["idt_wa1"][2] == "dicabut"
+    assert bridge.sent == [(WA_NUMBER, render.UNPAIRED)]
+    assert await outbox_rows(db) == []
+
+    await handler.handle("U2", WA_NUMBER, "/status")  # sudah tidak terhubung: tidak ke Command Facade
+    assert api.requests == [] and bridge.sent[-1] == (WA_NUMBER, render.NOT_REGISTERED)
+
+    await handler.handle("U3", WA_NUMBER, "/daftar ABCD2345")
+    assert (await _identities(db))["idt_wa1"] == (WA_NUMBER, "usr_0500", "aktif")
+
+
+@pytest.mark.anyio
 async def test_bound_chat_daftar_does_not_claim(db) -> None:
     await seeded(db)
     api = _api()
@@ -125,11 +144,22 @@ async def test_bound_chat_daftar_does_not_claim(db) -> None:
 # ---- GET dan DELETE /internal/v1/identities ----
 
 
+class TokenVerifier:
+    """Pengganti verifikasi token identity: `tok-<layanan>` sah untuk audiens `svc:gateway`."""
+
+    async def verify(self, token: str, audience: str) -> ServicePrincipal:
+        if not token.startswith("tok-") or audience != "svc:gateway":
+            raise AstriaError("TOKEN_TIDAK_VALID", "token layanan tidak valid", 401)
+        return ServicePrincipal(subject=f"svc:{token[4:]}", audience=audience, act=None, claims={})
+
+
 @pytest.fixture
 def gw(tmp_path: Path) -> Iterator[tuple[TestClient, Path]]:
     keys = tmp_path / "keys.json"
     keys.write_text(json.dumps({"api": API_KEY.hex(), "notifier": ("55" * 32)}))
-    with ready_client(build_app(gateway_settings(tmp_path, gw_caller_keys_file=keys))) as client:
+    app = build_app(gateway_settings(tmp_path, gw_caller_keys_file=keys))
+    app.state.token_verifier = TokenVerifier()
+    with ready_client(app) as client:
         yield client, tmp_path / "gateway_test.db"
 
 
@@ -168,3 +198,14 @@ def test_identities_require_api_or_config(gw) -> None:
         403,
     )
     assert client.get("/internal/v1/identities").status_code in (401, 403)
+
+
+def test_api_service_token_is_accepted(gw) -> None:
+    """api memanggil gateway dengan token layanan EdDSA dari identity, bukan HMAC."""
+    client, _ = gw
+    bearer = {"Authorization": "Bearer tok-api"}
+    assert client.get("/internal/v1/identities", headers=bearer).status_code == 200
+    assert client.delete("/internal/v1/identities/idt_tg1", headers=bearer).status_code == 204
+    assert client.get("/internal/v1/status", headers=bearer).status_code == 200
+    assert client.get("/internal/v1/identities", headers={"Authorization": "Bearer tok-notifier"}).status_code == 403
+    assert client.get("/internal/v1/identities", headers={"Authorization": "Bearer palsu"}).status_code == 401
