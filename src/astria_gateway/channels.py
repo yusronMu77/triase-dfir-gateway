@@ -131,6 +131,13 @@ class WhatsApp:
         self.last_error = f"whatsapp_{resp.status_code}"
         raise SendError(self.last_error, permanent=resp.status_code in (400, 401))
 
+    async def bridge(self, method: str, path: str) -> httpx.Response:
+        """Panggilan admin ke wa-bridge (`/tautan`, `/keluar`) untuk halaman kanal; galat jaringan menjadi SendError."""
+        try:
+            return await self._http.request(method, path, headers=self._headers)
+        except httpx.HTTPError as exc:
+            raise SendError(f"whatsapp_transport_{type(exc).__name__}") from None
+
     async def start(self) -> None:
         return None
 
