@@ -9,6 +9,7 @@ Galat memakai bentuk `{"error": {"code", "message", "trace_id"}}` dengan kode GW
 `PUT /secrets/{key}` (hanya `config`) menulis rahasia kanal lewat `vault.SecretVault`; respons 204 tanpa nilai.
 `GET /identities` dan `DELETE /identities/{id}` (`api`, `config`): daftar dan cabut ikatan kanal; ID chat atau nomor
 tidak pernah dikembalikan.
+api memanggil dengan token layanan EdDSA dari identity (audiens `svc:gateway`); notifier dan config dengan HMAC.
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from pathlib import Path
 from typing import Annotated, Any
 
 from astria_common import hmac_auth
+from astria_common.auth import require_service
 from astria_common.db import Database
 from astria_common.errors import AstriaError
 from astria_common.hmac_auth import H_SERVICE, HmacError
@@ -49,6 +51,8 @@ REVOKE_FIELDS = frozenset({"user_id", "reason", "revoked_at"})
 REVOKE_REASONS = frozenset({"akun_nonaktif", "peran_berubah", "kata_sandi_diganti", "sesi_dicabut"})
 USER_ID = re.compile(r"^usr_[A-Za-z0-9]+$")
 
+AUDIENCE = "svc:gateway"
+
 router = APIRouter(prefix="/internal/v1", tags=["gateway"])
 
 
@@ -62,8 +66,11 @@ def load_keys(path: Path | None) -> dict[str, bytes]:
 
 def require_caller(*allowed: str) -> Callable[[Request], Awaitable[str]]:
     permitted = frozenset(allowed)
+    by_token = require_service(AUDIENCE, {f"svc:{name}" for name in permitted})
 
     async def dependency(request: Request) -> str:
+        if request.headers.get("authorization", "")[:7].lower() == "bearer ":
+            return (await by_token(request)).subject.removeprefix("svc:")
         state: Any = request.app.state
         service = request.headers.get(H_SERVICE, "")
         key = state.caller_keys.get(service) if service in permitted else None

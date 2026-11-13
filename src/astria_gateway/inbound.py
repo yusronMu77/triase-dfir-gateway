@@ -4,7 +4,7 @@ Urutan per pesan: dedupe `inbound_message` -> batas laju global kanal -> identit
 batas laju per identitas -> tata bahasa tertutup -> Command Facade (hanya T0) -> balasan lewat outbox.
 Pengirim tak dikenal mendapat satu balasan tetap per 10 menit, dikirim langsung (tidak ada identitas untuk outbox).
 Pengirim tak dikenal boleh `/daftar <kode>`: kode diklaim lewat api (`/svc/v1/pairing/claim`), lalu chat diikat ke
-pemilik kode (GW§3.3). Ditunda: konfirmasi T1/T2 (`/ya`), `/berhenti`, dan grup chat.
+pemilik kode (GW§3.3). `/berhenti` memutus ikatan chat itu sendiri. Ditunda: konfirmasi T1/T2 (`/ya`) dan grup chat.
 """
 
 from __future__ import annotations
@@ -102,6 +102,9 @@ class InboundHandler:
             return
 
         identity_id, user_id = identity
+        if command is not None and command.name == "berhenti":
+            await self._unpair(msg_id, sender, identity_id)
+            return
         if not self._per_identity.allow(identity_id):
             reply, command_name, result = render.RATE_LIMITED, None, "rate_limited"
         else:
@@ -171,6 +174,19 @@ class InboundHandler:
             )
             await conn.execute(self._mark(msg_id, "selesai", identity_id=identity_id, command="daftar"))
         INBOUND_TOTAL.labels(self.kind, "paired").inc()
+
+    async def _unpair(self, msg_id: str, sender: str, identity_id: str) -> None:
+        async with self._db.engine.begin() as conn:
+            i = channel_identity
+            await conn.execute(
+                update(i).where(i.c.identity_id == identity_id).values(status="dicabut", updated_at=now())
+            )
+            await audit(conn, "identity.unpaired", channel_id=self.channel_id, identity_id=identity_id)
+            await conn.execute(self._mark(msg_id, "selesai", identity_id=identity_id, command="berhenti"))
+        INBOUND_TOTAL.labels(self.kind, "unpaired").inc()
+        # Langsung, bukan lewat outbox: outbox tidak mengirim ke identitas yang sudah dicabut.
+        with contextlib.suppress(SendError):
+            await self._send_direct(sender, "", render.UNPAIRED)
 
     async def _reject_pairing(self, msg_id: str, sender: str, reply: str) -> None:
         INBOUND_TOTAL.labels(self.kind, "pairing_failed").inc()

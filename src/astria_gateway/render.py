@@ -27,6 +27,7 @@ HELP = "\n".join(
         "/bukti <ID> - metadata bukti kartu",
         "/digest - digest terakhir",
         "/handover - serah terima shift",
+        "/berhenti - putuskan akun chat ini dari Astria",
         "/bantuan - daftar perintah ini",
     ]
 )
@@ -37,6 +38,7 @@ NOT_REGISTERED = (
 PAIRED = "Akun chat ini kini terhubung ke Astria. Ketik /bantuan untuk daftar perintah."
 PAIRING_FAILED = "Kode pairing tidak valid, sudah dipakai, atau kedaluwarsa. Terbitkan kode baru di web Astria."
 ALREADY_PAIRED = "Akun chat ini sudah terhubung ke Astria."
+UNPAIRED = "Akun chat ini diputus dari Astria. Kirim /daftar <kode> untuk menghubungkan lagi."
 RATE_LIMITED = "Terlalu banyak perintah. Coba lagi dalam satu menit."
 CORE_DOWN = "Sistem inti tidak tersedia, coba lagi nanti."
 NO_PENDING = "Tidak ada perintah yang menunggu konfirmasi."
