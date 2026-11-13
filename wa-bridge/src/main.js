@@ -9,6 +9,10 @@ import { NotConnected, WhatsApp } from './whatsapp.js'
 
 const env = process.env
 const log = pino({ level: env.LOG_LEVEL || 'info', base: { svc: 'wa-bridge' } })
+// libsignal mencetak isi sesi Signal (termasuk kunci privat) lewat console. Bridge hanya memakai pino,
+// jadi console dibungkam dan console.error dicatat sebagai teks pendek saja.
+for (const name of ['log', 'info', 'warn', 'debug', 'trace']) console[name] = () => {}
+console.error = (first) => log.warn({ pesan: typeof first === 'string' ? first.slice(0, 120) : 'objek' }, 'console')
 const tokenFile = env.WA_BRIDGE_TOKEN_FILE
 const token = tokenFile ? readFileSync(tokenFile, 'utf8').trim() : ''
 if (!token) {

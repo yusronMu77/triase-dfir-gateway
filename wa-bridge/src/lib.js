@@ -60,13 +60,13 @@ function isoTime(ts) {
 /**
  * Pesan Baileys -> `{id, dari, teks, waktu}` untuk gateway, atau null bila diabaikan:
  * dari diri sendiri, grup, status broadcast, newsletter, dan pesan tanpa teks.
- * Akun beralamat LID memakai `senderPn` (nomor asli) bila Baileys menyertakannya.
+ * Chat beralamat LID memakai nomor asli dari `remoteJidAlt` (Baileys 7) atau `senderPn` (Baileys 6).
  */
 export function normalizeInbound(msg) {
   const key = msg?.key
   if (!key || key.fromMe || typeof key.id !== 'string' || !key.id) return null
   const jid = key.remoteJid
-  const dari = jidToDigits(jid) ?? (typeof jid === 'string' && jid.endsWith('@lid') ? jidToDigits(key.senderPn) : null)
+  const dari = jidToDigits(jid) ?? (typeof jid === 'string' && jid.endsWith('@lid') ? jidToDigits(key.remoteJidAlt ?? key.senderPn) : null)
   const teks = textOf(msg.message)
   if (!dari || teks === null || !teks.trim()) return null
   return { id: key.id, dari, teks: teks.slice(0, MAX_TEXT_CHARS), waktu: isoTime(msg.messageTimestamp) }
