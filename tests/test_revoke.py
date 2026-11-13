@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 from helpers import (
     CHAT_ID,
     NOTIFIER_KEY,
+    SEED,
     CoreFake,
     TelegramFake,
     facade,
@@ -30,6 +31,7 @@ from astria_gateway.api import EventIn, _revoke
 from astria_gateway.inbound import InboundHandler
 from astria_gateway.main import build_app
 from astria_gateway.outbox import OutboxWorker, enqueue
+from astria_gateway.seed import Seed, apply_seed
 from astria_gateway.store import channel_identity
 
 EVENTS = "/internal/v1/events"
@@ -163,3 +165,13 @@ async def test_inbound_chat_of_revoked_user_is_not_acted_on(db) -> None:
     await handler.handle("u2", CHAT_ID, "/status")
     assert len(core.requests) == 1  # sesudah dicabut: tidak ada act, hanya balasan tidak terdaftar
     assert render.NOT_REGISTERED in [m["text"] for m in tg.sent()]
+
+
+@pytest.mark.anyio
+async def test_seed_on_restart_does_not_reactivate_revoked_identity(db) -> None:
+    await seeded(db)
+    await _revoke(db, EventIn.model_validate(revoke_body()))
+    await apply_seed(db, Seed.model_validate(SEED))  # seperti gateway dimulai ulang dengan seed yang sama
+    async with db.engine.connect() as conn:
+        rows = dict((await conn.execute(select(channel_identity.c.identity_id, channel_identity.c.status))).all())
+    assert rows["idt_tg1"] == rows["idt_em1"] == rows["idt_wa1"] == "dicabut"
