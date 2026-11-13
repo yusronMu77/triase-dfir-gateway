@@ -15,6 +15,7 @@ from astria_common.component import Check
 from astria_common.db import Database
 from astria_common.log import get_logger
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from sqlalchemy import select
 
 from astria_gateway.store import channel_config, channel_identity, now, upsert
 
@@ -70,6 +71,10 @@ async def apply_seed(db: Database, seed: Seed) -> None:
             await upsert(conn, channel_config, "channel_id", ch.channel_id, {"type": ch.type, "updated_at": now()})
         for ident in seed.identities:
             values = ident.model_dump(exclude={"identity_id"}) | {"updated_at": now()}
+            # Pencabutan (identity.revoked) menang atas seed: restart gateway tidak boleh mengaktifkan ulang ikatan.
+            current = select(channel_identity.c.status).where(channel_identity.c.identity_id == ident.identity_id)
+            if await conn.scalar(current) == "dicabut":
+                values["status"] = "dicabut"
             await upsert(conn, channel_identity, "identity_id", ident.identity_id, values)
     log.info("seed_diterapkan", channels=len(seed.channels), identities=len(seed.identities))
 
