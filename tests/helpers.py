@@ -10,7 +10,9 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+from astria_common.auth import ServicePrincipal
 from astria_common.db import Database
+from astria_common.errors import AstriaError
 from astria_common.hmac_auth import NonceCache, verify
 from sqlalchemy import select
 
@@ -151,3 +153,12 @@ def ready_client(app: Any) -> Iterator[Any]:
             assert time.monotonic() < deadline, client.get("/ready").json()
             time.sleep(0.05)
         yield client
+
+
+class TokenVerifier:
+    """Pengganti verifikasi token identity: `tok-<layanan>` sah untuk audiens `svc:gateway`."""
+
+    async def verify(self, token: str, audience: str) -> ServicePrincipal:
+        if not token.startswith("tok-") or audience != "svc:gateway":
+            raise AstriaError("TOKEN_TIDAK_VALID", "token layanan tidak valid", 401)
+        return ServicePrincipal(subject=f"svc:{token[4:]}", audience=audience, act=None, claims={})

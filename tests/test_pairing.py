@@ -10,11 +10,9 @@ from typing import Any
 
 import httpx
 import pytest
-from astria_common.auth import ServicePrincipal
-from astria_common.errors import AstriaError
 from astria_common.hmac_auth import signed_headers
 from fastapi.testclient import TestClient
-from helpers import WA_NUMBER, CoreFake, facade, gateway_settings, outbox_rows, ready_client, seeded
+from helpers import WA_NUMBER, CoreFake, TokenVerifier, facade, gateway_settings, outbox_rows, ready_client, seeded
 from sqlalchemy import select
 
 from astria_gateway import render
@@ -145,15 +143,6 @@ async def test_bound_chat_daftar_does_not_claim(db) -> None:
 # ---- GET dan DELETE /internal/v1/identities ----
 
 
-class TokenVerifier:
-    """Pengganti verifikasi token identity: `tok-<layanan>` sah untuk audiens `svc:gateway`."""
-
-    async def verify(self, token: str, audience: str) -> ServicePrincipal:
-        if not token.startswith("tok-") or audience != "svc:gateway":
-            raise AstriaError("TOKEN_TIDAK_VALID", "token layanan tidak valid", 401)
-        return ServicePrincipal(subject=f"svc:{token[4:]}", audience=audience, act=None, claims={})
-
-
 @pytest.fixture
 def gw(tmp_path: Path) -> Iterator[tuple[TestClient, Path]]:
     keys = tmp_path / "keys.json"
@@ -176,6 +165,7 @@ def test_list_identities_without_chat_handles(gw) -> None:
     assert set(items) == {"idt_tg1", "idt_em1", "idt_wa1", "idt_em2"}
     assert items["idt_wa1"]["user_id"] == "usr_0142" and items["idt_em2"]["status"] == "dicabut"
     assert set(items["idt_wa1"]) == {"id", "user_id", "channel_id", "status", "updated_at"}
+    assert items["idt_wa1"]["updated_at"].endswith("+00:00")  # SQLite membuang zona; dikembalikan UTC
     assert WA_NUMBER not in resp.text
 
 

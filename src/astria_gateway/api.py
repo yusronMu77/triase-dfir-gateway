@@ -9,6 +9,8 @@ Galat memakai bentuk `{"error": {"code", "message", "trace_id"}}` dengan kode GW
 `PUT /secrets/{key}` (hanya `config`) menulis rahasia kanal lewat `vault.SecretVault`; respons 204 tanpa nilai.
 `GET /identities` dan `DELETE /identities/{id}` (`api`, `config`): daftar dan cabut ikatan kanal; ID chat atau nomor
 tidak pernah dikembalikan.
+`GET /outbox` dan `POST /outbox/{id}/retry` (`api`, `config`): log pengiriman tanpa isi pesan dan penerima, dan
+kirim ulang pesan `dead`.
 `GET /whatsapp/link` dan `POST /whatsapp/link/logout` (`api`, `config`): status tautan bot WhatsApp beserta QR, dan
 putuskan tautan, lewat wa-bridge.
 api memanggil dengan token layanan EdDSA dari identity (audiens `svc:gateway`); notifier dan config dengan HMAC.
@@ -20,7 +22,7 @@ import hmac
 import json
 import re
 from collections.abc import Awaitable, Callable
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -90,6 +92,11 @@ def require_caller(*allowed: str) -> Callable[[Request], Awaitable[str]]:
         return service
 
     return dependency
+
+
+def _iso(ts: datetime) -> str:
+    """Semua stempel waktu disimpan UTC (`store.now`); SQLite membuang zona, jadi zona ditambahkan kembali."""
+    return (ts if ts.tzinfo else ts.replace(tzinfo=UTC)).isoformat()
 
 
 def _db(request: Request) -> Database:
@@ -284,7 +291,7 @@ async def status(
     state: Any = request.app.state
     return {
         "outbox": {s: counts.get(s, 0) for s in ("pending", "sending", "sent", "dead")},
-        "oldest_pending_at": oldest.isoformat() if oldest else None,
+        "oldest_pending_at": _iso(oldest) if oldest else None,
         "telegram": state.poller.status() if state.poller else {"enabled": False},
         "whatsapp": {"enabled": "whatsapp" in state.adapters},
         "email": {"enabled": "email" in state.adapters},
@@ -306,7 +313,7 @@ async def list_identities(request: Request, _caller: Annotated[str, Depends(requ
             "user_id": r.user_id,
             "channel_id": r.channel_id,
             "status": r.status,
-            "updated_at": r.updated_at.isoformat(),
+            "updated_at": _iso(r.updated_at),
         }
         for r in rows
     ]
@@ -375,3 +382,53 @@ async def whatsapp_unlink(request: Request, caller: Annotated[str, Depends(requi
     async with _db(request).engine.begin() as conn:
         await audit(conn, "whatsapp.unlinked", caller=caller)
     return {"status": "keluar"}
+
+
+OUTBOX_STATUSES = ("pending", "sending", "sent", "dead")
+OUTBOX_LIMIT = 200
+
+
+@router.get("/outbox")
+async def list_outbox(
+    request: Request,
+    _caller: Annotated[str, Depends(require_caller("api", "config"))],
+    status: str | None = None,
+) -> dict:
+    """Log pengiriman terbaru (paling banyak 200). Isi pesan dan penerima tidak dikembalikan."""
+    if status is not None and status not in OUTBOX_STATUSES:
+        raise AstriaError("GW_EVENT_INVALID", "status tidak dikenal", 422)
+    m = outbox_message
+    cols = (m.c.message_id, m.c.channel_id, m.c.subject, m.c.status, m.c.attempts, m.c.last_error)
+    times = (m.c.created_at, m.c.updated_at, m.c.next_attempt_at)
+    query = select(*cols, *times).order_by(m.c.created_at.desc(), m.c.message_id).limit(OUTBOX_LIMIT)
+    if status is not None:
+        query = query.where(m.c.status == status)
+    async with _db(request).engine.connect() as conn:
+        rows = (await conn.execute(query)).all()
+    return {
+        "items": [
+            {c.name: getattr(r, c.name) for c in cols} | {c.name: _iso(getattr(r, c.name)) for c in times} for r in rows
+        ]
+    }
+
+
+@router.post("/outbox/{message_id}/retry")
+async def retry_outbox(
+    request: Request, message_id: str, caller: Annotated[str, Depends(require_caller("api", "config"))]
+) -> dict:
+    """Kirim ulang pesan `dead`: kembali `pending` dengan jatah percobaan baru. Pesan lain 409."""
+    m = outbox_message
+    async with _db(request).engine.begin() as conn:
+        status = await conn.scalar(select(m.c.status).where(m.c.message_id == message_id))
+        if status is None:
+            raise AstriaError("GW_OUTBOX_UNKNOWN", "pesan tidak ditemukan", 404)
+        if status != "dead":
+            raise AstriaError("GW_OUTBOX_NOT_DEAD", "hanya pesan gagal (dead) yang bisa dikirim ulang", 409)
+        ts = now()
+        await conn.execute(
+            update(m)
+            .where(m.c.message_id == message_id)
+            .values(status="pending", attempts=0, next_attempt_at=ts, updated_at=ts)
+        )
+        await audit(conn, "outbox.retry", message_id=message_id, caller=caller)
+    return {"message_id": message_id, "status": "pending"}
